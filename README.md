@@ -4,17 +4,17 @@
 for coding agents running on the same Linux machine. Both Codex and Claude can
 initiate a conversation, ask questions, propose changes, and reply in a thread.
 
-**Let Codex, another coding agent, or a script talk to the Claude Code session
-that is already working on your project.** Ask for progress, challenge a plan,
-request a review, and receive a reply without copying messages between terminals
-or starting another model session.
+**Connect existing, open Codex and Claude Code chats in a shared project
+conversation. Either side can start.** Exchange progress updates, challenge a
+plan, request reviews, and propose improvements without copying messages between
+terminals. Claude keeps its current chat, model, and project context; connecting
+does not restart or replace it.
 
 ```text
-Codex / agent / shell                       Existing Claude Code session
-        │                                             ▲
-        └── send ──► local relay ── peer message ───────┘
-                         │                            │
-        ◄── read / wait ─┴── SQLite inbox ◄── SendMessage
+Existing Codex chat  ◄──── local relay + persistent inbox ────►  Existing Claude chat
+  CLI send/read/wait                                             SendMessage
+
+Either participant can open a thread or reply to one.
 ```
 
 The relay is a small Python CLI with **no runtime dependencies**. It stores
@@ -31,6 +31,7 @@ can access it. It is not published on PyPI.
 ## What it is useful for
 
 - A Codex reviewer questions a Claude orchestrator's assumptions while its workers continue.
+- Claude starts a discussion with Codex to request a second opinion or flag a blocker.
 - An agent asks the session that wrote a component about its design or progress.
 - Two agents discuss a proposed change in a persistent thread before either edits shared files.
 - A person reads an exported conversation to see what was proposed, challenged, and agreed.
@@ -96,10 +97,11 @@ Release downloads also include a wheel and source archive; the wheel can be
 installed with `pipx install /path/to/codex_claude_local_relay-0.1.0-py3-none-any.whl`.
 The wheel filename is portable Python packaging; this release's runtime is Linux-only.
 
-## Quick start: ask a running Claude session
+## Quick start: connect existing open chats
 
-Run these commands from the **project you want to discuss**, using the same
-Linux user as Claude:
+Run these setup commands from either agent's shell or your terminal, in the
+**project you want to discuss**, using the same Linux user as Claude. Neither
+agent needs to send the first conversational message to establish the mailbox:
 
 ```bash
 cd /path/to/your/project
@@ -113,6 +115,20 @@ not proof of its role; confirm with the user or ask the session once connected.
 
 ```bash
 codex-claude-local-relay connect --session YOUR_SESSION_UUID
+codex-claude-local-relay status
+```
+
+The connection is now ready. Choose either starting point:
+
+- **Claude starts:** give the open Claude chat the `address` returned by `status`
+  (or let it run that command). It sends a native `SendMessage` to that address,
+  beginning its body with `PROJECT_RELAY {"thread":"planning"}` and its question.
+  No earlier Codex request or `reply_to` is required. Codex runs `read` or `wait`
+  to receive it and answers with `send --thread planning --reply-to MESSAGE_UUID`.
+- **Codex starts:** send a question through the CLI. The open Claude chat gets
+  the peer message and replies through `SendMessage`. For example:
+
+```bash
 codex-claude-local-relay send --thread planning \
   'Please confirm your role, summarize your current task, and identify one decision that could use an independent review.'
 codex-claude-local-relay read
@@ -147,10 +163,11 @@ Piped stdin is also supported. `read` returns up to 200 rows with a cursor;
 repeat with that cursor for the next page. `wait` caps each wait at 60 seconds.
 Export includes the complete history, not just the first page.
 
-### Claude replies and unsolicited questions
+### Claude starts a thread or replies
 
-The incoming message supplies the actual socket address and request ID. Claude
-replies with its native tool, conceptually:
+Claude can obtain the relay address from `status` before any messages are sent.
+For a reply, the incoming message also supplies the address and request ID.
+Its native tool call looks like this (omit `reply_to` to start a new thread):
 
 ```text
 SendMessage(
