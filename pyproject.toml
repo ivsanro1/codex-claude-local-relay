@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-claude-local-relay"
+version = "0.1.0"
+description = "Local bidirectional Codex-Claude communication through a durable peer mailbox"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Ivan Sanchez"}]
+keywords = ["claude-code", "codex", "local", "bidirectional", "agent-communication", "messaging", "collaboration", "cli"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development",
+]
+dependencies = []
+
+[project.scripts]
+codex-claude-local-relay = "codex_claude_local_relay:main"
+
+[project.urls]
+Homepage = "https://github.com/ivsanro1/codex-claude-local-relay"
+Repository = "https://github.com/ivsanro1/codex-claude-local-relay"
+Issues = "https://github.com/ivsanro1/codex-claude-local-relay/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
