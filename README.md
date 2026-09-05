@@ -25,8 +25,7 @@ and account; responding still consumes that account's model usage.
 
 **Status: experimental, v0.1.0.** This uses an internal Claude Code interface,
 not a public Anthropic API. Tested with Claude Code **2.1.261 on Linux**.
-The repository is currently private: only its owner and invited collaborators
-can access it. It is not published on PyPI.
+It is not published on PyPI; install it from the GitHub repository.
 
 ## What it is useful for
 
@@ -69,28 +68,20 @@ Use a persistent installation because the relay starts a background process.
 [uv tool installation](https://docs.astral.sh/uv/guides/tools/#installing-tools)
 keeps it separate from your project's dependencies.
 
-While the repository is private, authenticate GitHub CLI and clone with an
-account that has access:
+Install the pinned tag directly from GitHub:
 
 ```bash
-gh auth login
-gh repo clone ivsanro1/codex-claude-local-relay
-cd codex-claude-local-relay
-git checkout v0.1.0
-uv tool install .
+uv tool install 'git+https://github.com/ivsanro1/codex-claude-local-relay.git@v0.1.0'
 codex-claude-local-relay --version
 ```
 
-Alternatively, from the clone:
+Or clone and install from the checkout:
 
 ```bash
-pipx install .
-```
-
-With Git/SSH authentication already working, install the pinned tag directly:
-
-```bash
-uv tool install 'git+ssh://git@github.com/ivsanro1/codex-claude-local-relay.git@v0.1.0'
+git clone https://github.com/ivsanro1/codex-claude-local-relay.git
+cd codex-claude-local-relay
+git checkout v0.1.0
+uv tool install .   # or: pipx install .
 ```
 
 Release downloads also include a wheel and source archive; the wheel can be
