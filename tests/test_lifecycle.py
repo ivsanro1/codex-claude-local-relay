@@ -7,6 +7,10 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+
+from codex_claude_local_relay.connections import Connection
+from codex_claude_local_relay import relay
 
 
 class LifecycleTests(unittest.TestCase):
@@ -81,6 +85,35 @@ class LifecycleTests(unittest.TestCase):
         other = self.cli('--project', str(self.root.parent), 'init', '--session', self.target['sessionId'], check=False)
         self.assertNotEqual(other.returncode, 0)
         self.assertIn('different project/session', other.stderr)
+
+    def test_pair_forwards_only_enrolled_claude_to_exact_codex(self):
+        codex = 'codex:10000000-0000-4000-8000-000000000001'
+        claude = 'claude:' + self.target['sessionId']
+        with patch.dict(os.environ, self.env):
+            connection = Connection.create(self.root / 'pair', [
+                {'id': codex, 'cwd': str(self.root)}, {'id': claude, 'cwd': str(self.root)}])
+            self.addCleanup(connection.disconnect)
+            with patch('codex_claude_local_relay.connections.subprocess.run',
+                       return_value=subprocess.CompletedProcess([], 0, '', '')) as native:
+                for _ in range(150):
+                    connection.tick(lambda key: self.assertIn(key, (codex, claude)), '/synthetic/codex')
+                    rows = connection.read()
+                    if any(r['sender'] == claude and r['status'] == 'queued_native' for r in rows):
+                        break
+                    time.sleep(0.03)
+                else:
+                    self.fail('Claude reply did not reach the exact Codex queue: ' + repr(rows))
+                self.assertTrue(all(call.args[0][3] == codex[6:] for call in native.call_args_list))
+                count = len(rows)
+                # Same authenticated Claude, but an address/envelope copied from
+                # another connection: never forward it through this pair.
+                with relay.connect_db(connection.leg(claude)) as db:
+                    relay.record(db, message_id='wrong-connection', direction='in', body='Foreign thread',
+                                 status='received', thread='different-connection')
+                    relay.record(db, message_id='wrong-reply', direction='in', body='Foreign reply',
+                                 status='received', thread=connection.config['id'], reply_to='foreign-message')
+                connection.tick(lambda _: None, '/synthetic/codex')
+                self.assertEqual(len(connection.read()), count)
 
 
 if __name__ == '__main__':

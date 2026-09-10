@@ -416,6 +416,14 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('sessions', help='List reachable Claude sessions as JSON; sends nothing')
     commands.add_parser('doctor', help='Read-only platform and discovery diagnostics')
+    pair_send = commands.add_parser('pair-send', help='Send through an immutable controller-managed session pair')
+    pair_send.add_argument('--from-session', required=True)
+    pair_send.add_argument('--to-session', required=True)
+    pair_send.add_argument('--reply-to')
+    pair_send.add_argument('--file', type=Path)
+    pair_send.add_argument('message', nargs='?')
+    pair_read = commands.add_parser('pair-read', help='Read a controller-managed connection and its delivery statuses')
+    pair_read.add_argument('--after', type=int, default=0)
     for name in ('connect', 'init'):
         sub = commands.add_parser(name, help='Enroll an exact session UUID' + (' and start the relay' if name == 'connect' else ''))
         sub.add_argument('--session', required=True, dest='session_id')
@@ -441,6 +449,12 @@ def main(argv=None):
     project = args.project.resolve()
     # Do not resolve the last state component: initialize must reject symlinks.
     state = args.state.absolute() if args.state else default_state(project)
+    if args.command in ('pair-send', 'pair-read'):
+        if not args.state:
+            raise ValueError('Pair commands require an explicit --state; project defaults are refused')
+        from .connections import cli
+        print(json.dumps(cli(state, args), indent=2))
+        return 0
     if args.command == 'sessions':
         print(json.dumps(sessions(), indent=2))
         return 0

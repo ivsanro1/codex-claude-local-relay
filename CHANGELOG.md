@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 — 2026-09-10
+
+- Add immutable session-pair mailboxes for Switchboard and other local controllers.
+- Notify and relay to Codex through its native UUID-addressed queue; retain authenticated Claude peer transport.
+- Reject mismatched sender context, recipient IDs, connection threads, and foreign reply IDs.
+- Persist separate delivery statuses, cancel unsent messages on disconnect, and never automatically retry ambiguous sends.
+
 ## 0.1.0 — 2026-09-05
 
 Initial experimental release.

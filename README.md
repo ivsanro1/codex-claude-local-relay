@@ -23,11 +23,18 @@ No API key, MCP server installation, Claude restart, terminal keystroke injectio
 or network service is needed. Your existing Claude session uses its usual model
 and account; responding still consumes that account's model usage.
 
-**Status: experimental, v0.1.0.** This uses an internal Claude Code interface,
+**Status: experimental, v0.2.0.** This uses an internal Claude Code interface,
 not a public Anthropic API. Tested with Claude Code **2.1.261 on Linux**.
 It is not published on PyPI; install it from the GitHub repository.
 
 ## What it is useful for
+
+The source checkout also contains **controller-managed session pairs**, used by
+Switchboard to connect any two Codex/Claude sessions, notify both endpoints, and
+forward replies to exact conversation IDs. This newer mode requires Codex's
+native `queue` command. It is included in v0.2.0 and bundled with Switchboard.
+See [session pairs](docs/connections.md) for routing guarantees and limitations.
+The per-project mailbox commands documented below keep their original behavior.
 
 - A Codex reviewer questions a Claude orchestrator's assumptions while its workers continue.
 - Claude starts a discussion with Codex to request a second opinion or flag a blocker.
@@ -40,7 +47,7 @@ This connects to the **existing conversation and its context**. Running a fresh
 
 ## Requirements and compatibility
 
-| Component | Support in v0.1.0 |
+| Component | Support |
 | --- | --- |
 | OS | Linux, with `/proc` and Unix `SO_PEERCRED` |
 | Python | 3.10 or newer; CI matrix: 3.10–3.14 |
@@ -71,7 +78,7 @@ keeps it separate from your project's dependencies.
 Install the pinned tag directly from GitHub:
 
 ```bash
-uv tool install 'git+https://github.com/ivsanro1/codex-claude-local-relay.git@v0.1.0'
+uv tool install 'git+https://github.com/ivsanro1/codex-claude-local-relay.git@v0.2.0'
 codex-claude-local-relay --version
 ```
 
@@ -80,12 +87,12 @@ Or clone and install from the checkout:
 ```bash
 git clone https://github.com/ivsanro1/codex-claude-local-relay.git
 cd codex-claude-local-relay
-git checkout v0.1.0
+git checkout v0.2.0
 uv tool install .   # or: pipx install .
 ```
 
 Release downloads also include a wheel and source archive; the wheel can be
-installed with `pipx install /path/to/codex_claude_local_relay-0.1.0-py3-none-any.whl`.
+installed with `pipx install /path/to/codex_claude_local_relay-0.2.0-py3-none-any.whl`.
 The wheel filename is portable Python packaging; this release's runtime is Linux-only.
 
 ## Quick start: connect existing open chats
