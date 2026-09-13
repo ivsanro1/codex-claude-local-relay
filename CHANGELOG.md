@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 — 2026-09-10
+
+- Add a transactional controller preparation hook before delivery selection, allowing application protocols to hold messages until a handshake completes without changing native transports or CLI routing.
+
 ## 0.2.0 — 2026-09-10
 
 - Add immutable session-pair mailboxes for Switchboard and other local controllers.

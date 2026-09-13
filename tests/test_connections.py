@@ -98,6 +98,27 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(config["participants"], self.participants)
         self.assertEqual(self.link.state.stat().st_mode & 0o777, 0o700)
 
+    def test_controller_prepares_messages_in_delivery_selection_transaction(self):
+        class Gated(Connection):
+            def prepare(self, db):
+                self_transaction = db.in_transaction
+                if not self_transaction:
+                    raise AssertionError("Preparation must be transactional")
+                db.execute("UPDATE pair_messages SET status='waiting_handshake' WHERE kind='message'")
+
+        link = Gated(self.link.state)
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": A[6:]}):
+            # The ordinary CLI class writes to the same queue as the controller.
+            pending = self.link.send(A, B, "Wait for the application handshake")
+        with patch(
+            "codex_claude_local_relay.connections.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ) as run:
+            for _ in range(4):
+                link.tick(lambda _: None, "/synthetic/codex")
+            self.assertEqual(run.call_count, 2)  # Only the controller's notices.
+        self.assertEqual(next(r for r in link.read() if r["id"] == pending["id"])["status"], "waiting_handshake")
+
 
 if __name__ == "__main__":
     unittest.main()

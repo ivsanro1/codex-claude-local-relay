@@ -305,6 +305,15 @@ class Connection:
                             (delivery["status"], error, item["id"]),
                         )
 
+    def prepare(self, db):
+        """Controller hook to validate/hold messages before selecting a delivery.
+
+        Runs inside the same IMMEDIATE transaction as queue selection, after
+        authenticated Claude replies have been collected. Do not perform I/O
+        or commit here. Native CLI sends arriving concurrently wait until this
+        transaction finishes and are prepared on the next tick.
+        """
+
     def tick(self, validate, codex_executable=None):
         if not self.enabled():
             return
@@ -312,6 +321,8 @@ class Connection:
             if key.startswith("claude:"):
                 self._collect(key)
         with relay.connect_db(self.state) as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.prepare(db)
             row = db.execute(
                 "SELECT * FROM pair_messages WHERE status='queued' ORDER BY seq LIMIT 1"
             ).fetchone()
