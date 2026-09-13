@@ -53,3 +53,28 @@ isolate programs sharing the Linux account. Environment checks are accidental
 misrouting protection, not an authentication boundary against that same user.
 Models retain other tools and may choose to use them. A universal 100% guarantee
 against any wrong-session message would require a stronger execution boundary.
+
+## Sandbox access
+
+The sender needs write access to the state directory, including SQLite WAL and
+journal files. Changing only the database file's Unix mode does not make a path
+writable inside a read-only sandbox mount. Controllers should create a private
+parent relay directory before launching Codex, then pass `--add-dir PARENT` on
+each native start and resume so later-created connection databases are covered.
+This native option retains other sandbox and approval settings; read-only
+configurations and already running sessions still need their normal approved
+execution path. Do not change global agent settings or restart a live session
+without the user's authorization.
+
+Pair commands require both `connection.json` and `mail.sqlite`; only the
+controller creates them. A missing or partially created pair reports what is
+missing without constructing a replacement. An access failure during
+initialization explicitly reports that no message was queued. Resolve access
+before sending once. A failure during the send transaction reports uncertain
+queueing and must be inspected before another attempt. A queued or ambiguous
+send must never be repeated automatically, and an approval denial means stop.
+
+Permission to share task material is separate from filesystem access. The host
+application should show and record the user's sharing scope at pairing time,
+including any model-provider processing, while preserving existing permissions
+and the selected workflow's sharing barriers.
