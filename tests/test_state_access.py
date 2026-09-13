@@ -51,6 +51,14 @@ class StateAccessTests(unittest.TestCase):
                         cli(self.pair.state, self.args)
                 self.assertEqual(len(self.pair.read()), 2)
 
+    def test_unreadable_state_is_not_misreported_as_missing(self):
+        # Path.is_file() suppresses permission errors on newer Python versions.
+        with patch.object(Path, "stat", side_effect=PermissionError(errno.EACCES, "fixture denied")):
+            with self.assertRaisesRegex(RuntimeError, "No message was queued") as caught:
+                cli(self.pair.state, self.args)
+        self.assertIn("Cannot access relay database", str(caught.exception))
+        self.assertNotIn("missing connection.json", str(caught.exception))
+
     @unittest.skipIf(os.geteuid() == 0, "root ignores ordinary file write permissions")
     def test_real_readonly_database_does_not_queue_and_can_send_after_access_is_restored(self):
         database = self.pair.state / "mail.sqlite"

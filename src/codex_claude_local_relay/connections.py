@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -48,7 +49,11 @@ class Connection:
         # not silently manufacture an empty database while trying to send/read.
         try:
             for name in ("connection.json", "mail.sqlite"):
-                if not (self.state / name).is_file():
+                try:
+                    present = stat.S_ISREG((self.state / name).stat().st_mode)
+                except FileNotFoundError:
+                    present = False
+                if not present:
                     raise ValueError(
                         f"Connection state is incomplete at {self.state}: missing {name}. "
                         "Have the controller finish creating the connection. No message was queued."
