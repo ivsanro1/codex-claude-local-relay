@@ -23,7 +23,7 @@ No API key, MCP server installation, Claude restart, terminal keystroke injectio
 or network service is needed. Your existing Claude session uses its usual model
 and account; responding still consumes that account's model usage.
 
-**Status: experimental, v0.2.0.** This uses an internal Claude Code interface,
+**Status: experimental, v0.2.2.** This uses an internal Claude Code interface,
 not a public Anthropic API. Tested with Claude Code **2.1.261 on Linux**.
 It is not published on PyPI; install it from the GitHub repository.
 
@@ -78,7 +78,7 @@ keeps it separate from your project's dependencies.
 Install the pinned tag directly from GitHub:
 
 ```bash
-uv tool install 'git+https://github.com/ivsanro1/codex-claude-local-relay.git@v0.2.0'
+uv tool install 'git+https://github.com/ivsanro1/codex-claude-local-relay.git@v0.2.2'
 codex-claude-local-relay --version
 ```
 
@@ -87,12 +87,12 @@ Or clone and install from the checkout:
 ```bash
 git clone https://github.com/ivsanro1/codex-claude-local-relay.git
 cd codex-claude-local-relay
-git checkout v0.2.0
+git checkout v0.2.2
 uv tool install .   # or: pipx install .
 ```
 
 Release downloads also include a wheel and source archive; the wheel can be
-installed with `pipx install /path/to/codex_claude_local_relay-0.2.0-py3-none-any.whl`.
+installed with `pipx install /path/to/codex_claude_local_relay-0.2.2-py3-none-any.whl`.
 The wheel filename is portable Python packaging; this release's runtime is Linux-only.
 
 ## Quick start: connect existing open chats
@@ -274,6 +274,7 @@ expose the socket/state to other users. See [protocol notes](docs/protocol.md).
 | `Operation not permitted` | Run through your agent's approved host-execution mechanism; filesystem sharing alone does not grant socket access. |
 | `sent` but no answer | Claude may be busy, awaiting permission, or unable to use `SendMessage`. Check its terminal; do not assume delivery. |
 | Reply failed after restart | Give Claude the new address shown by `status`. |
+| Cannot access relay database | Grant write access to the state directory, including SQLite WAL/journal files, or request normal approved execution of the exact relay command. See [sandbox access](docs/connections.md#sandbox-access). |
 | Wrong/empty mailbox | Use the same `--project` or `--state` as `connect`. |
 | Mailbox belongs to another session | Use a new state directory; existing messages are never silently reassigned. |
 | State directory rejected | It must be a real directory owned by you, mode 0700; symlinks/shared directories are rejected. |

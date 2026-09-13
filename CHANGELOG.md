@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-09-13
+
+- Explain mailbox access failures with the exact state path, SQLite side-file requirements, and normal approved execution or a native Codex directory grant.
+- Refuse missing or partial pair state without creating an empty database. Distinguish initialization failures where nothing was queued from uncertain send failures that must not be retried automatically.
+- Add Codex routing instructions for sandbox access without bypassing approval denials.
+
 ## 0.2.1 — 2026-09-10
 
 - Add a transactional controller preparation hook before delivery selection, allowing application protocols to hold messages until a handshake completes without changing native transports or CLI routing.

@@ -7,12 +7,14 @@ terminal injection, configuration changes, or automatic replies occur here.
 import argparse
 from contextlib import contextmanager
 import datetime as dt
+import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
 from pathlib import Path
+import shlex
 import signal
 import socket
 import socketserver
@@ -29,6 +31,32 @@ from . import __version__
 
 MAX_FRAME = 1_048_576
 TESTED_CLAUDE_VERSIONS = ('2.1.261',)
+
+
+class StateAccessError(RuntimeError):
+    """The mailbox needs filesystem access; this alone says nothing about delivery."""
+
+    def __init__(self, state, cause):
+        state = Path(state).absolute()
+        super().__init__(
+            f'Cannot access relay database {state / "mail.sqlite"}. '
+            f'The state directory {state} must be writable, including SQLite journal/WAL files. '
+            'If the agent sandbox makes this path read-only, request approved execution of '
+            'the exact supplied relay command, or start/resume Codex with '
+            f'--add-dir {shlex.quote(str(state))}. '
+            'Controllers should create and grant the parent relay directory before agent launch '
+            f'so future mailboxes are covered. Original error: {cause}'
+        )
+
+
+def state_access_failure(exc):
+    if isinstance(exc, OSError):
+        return exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS)
+    code = getattr(exc, 'sqlite_errorcode', None)
+    if code is not None:
+        return code & 0xff in (sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_READONLY)
+    # Python 3.10 does not expose SQLite error codes.
+    return str(exc) in ('unable to open database file', 'attempt to write a readonly database')
 
 
 def claude_dir():
@@ -88,18 +116,29 @@ def resolve_session(session_id):
 
 @contextmanager
 def connect_db(state):
-    db = sqlite3.connect(state / 'mail.sqlite', timeout=10)
-    db.row_factory = sqlite3.Row
+    db = None
     try:
+        db = sqlite3.connect(state / 'mail.sqlite', timeout=10)
+        db.row_factory = sqlite3.Row
         with db:
             yield db
+    except sqlite3.OperationalError as exc:
+        if state_access_failure(exc):
+            raise StateAccessError(state, exc) from exc
+        raise
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 def initialize(state):
-    state.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = state.lstat()
+    try:
+        state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = state.lstat()
+    except OSError as exc:
+        if state_access_failure(exc):
+            raise StateAccessError(state, exc) from exc
+        raise
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ValueError(f'State directory must be a private directory owned by you (0700): {state}')
     with connect_db(state) as db:
