@@ -24,10 +24,27 @@ signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 with socket.socket(socket.AF_UNIX) as server:
     server.bind(str(path))
     server.listen(4)
+    server.settimeout(.05)
     (registry / f'{os.getpid()}.json').write_text(json.dumps(record))
     (root / 'ready.json').write_text(json.dumps(record))
     while True:
-        with server.accept()[0] as connection:
+        initiate = root / 'initiate.json'
+        if initiate.exists():
+            request = json.loads(initiate.read_text())
+            initiate.unlink()
+            reply = {'type': 'user', 'msg_id': str(uuid.uuid4()), 'message': {'content':
+                'PROJECT_RELAY ' + json.dumps({'thread': request['thread']}) + '\nFixture initiated'}}
+            with socket.socket(socket.AF_UNIX) as client:
+                client.connect(request['address'][4:])
+                client.sendall((json.dumps(reply) + '\n').encode())
+                client.shutdown(socket.SHUT_WR)
+                while client.recv(1024):
+                    pass
+        try:
+            accepted, _ = server.accept()
+        except socket.timeout:
+            continue
+        with accepted as connection:
             connection.settimeout(5)
             frames = [json.loads(line) for line in connection.makefile('rb')]
         for frame in frames:

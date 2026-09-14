@@ -228,6 +228,13 @@ class Connection:
                 "UPDATE pair_messages SET status='unknown',error='Controller stopped during delivery; receipt is unconfirmed.' WHERE status='sending'"
             )
 
+    def maintain(self):
+        """Restore listeners without queueing messages, handshakes or idle notices."""
+        if self.enabled():
+            for key in self.ids:
+                if key.startswith("claude:"):
+                    relay.start_daemon(self.leg(key))
+
     def disconnect(self):
         with relay.connect_db(self.state) as db:
             db.execute("UPDATE pair_meta SET value='false' WHERE key='enabled'")

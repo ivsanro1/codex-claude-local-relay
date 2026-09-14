@@ -74,10 +74,84 @@ class LifecycleTests(unittest.TestCase):
         self.cli('stop')
         self.assertFalse(self.cli('status')['running'])
         second = self.cli('start')
-        self.assertNotEqual(first['address'], second['address'])
+        self.assertEqual(first['address'], second['address'])
         self.assertIn(reply['id'], [r['id'] for r in self.cli('read')['messages']])
         request2 = self.cli('send', '--thread', 'plan', 'After restart')
         self.await_reply(request2['id'])
+
+    def test_idle_pair_recovers_without_messages_and_claude_can_speak_first(self):
+        codex = 'codex:10000000-0000-4000-8000-000000000001'
+        claude = 'claude:' + self.target['sessionId']
+        with patch.dict(os.environ, self.env):
+            connection = Connection.create(self.root / 'pair', [
+                {'id': codex, 'cwd': str(self.root)}, {'id': claude, 'cwd': str(self.root)}])
+            self.addCleanup(connection.disconnect)
+            leg = connection.leg(claude)
+            first = relay.daemon_status(leg)
+            # A completed pair has no outgoing work. No notice is sent to any model.
+            with relay.connect_db(connection.state) as db:
+                db.execute("UPDATE pair_messages SET status='sent'")
+            before = connection.read()
+            relay.stop_daemon(leg)
+            reopened = Connection(connection.state)
+            reopened.recover()
+            with patch('codex_claude_local_relay.connections.subprocess.run') as native:
+                for _ in range(5):
+                    reopened.maintain()
+                    reopened.tick(lambda _: None, '/synthetic/codex')
+                native.assert_not_called()
+            self.assertEqual(reopened.read(), before)
+            self.assertEqual(relay.read_messages(leg), [])
+            self.assertEqual(relay.daemon_status(leg)['address'], first['address'])
+            # Only the fixture is prompted here: its independent send uses the old route.
+            (self.root / 'initiate.json').write_text(json.dumps({
+                'address': first['address'], 'thread': connection.config['id']}))
+            with patch('codex_claude_local_relay.connections.subprocess.run',
+                       return_value=subprocess.CompletedProcess([], 0, '', '')) as native:
+                for _ in range(100):
+                    reopened.tick(lambda _: None, '/synthetic/codex')
+                    if len(reopened.read()) > len(before):
+                        break
+                    time.sleep(.03)
+                self.assertEqual(native.call_count, 1)
+                self.assertEqual(native.call_args.args[0][3], codex[6:])
+
+    def test_missing_socket_is_unhealthy_and_repaired_without_sending(self):
+        first = self.cli('connect', '--session', self.target['sessionId'])
+        Path(first['address'][4:]).unlink()
+        status = self.cli('status')
+        self.assertTrue(status['process_running'])
+        self.assertFalse(status['running'])
+        repaired = self.cli('start')
+        self.assertEqual(repaired['address'], first['address'])
+        self.assertNotEqual(repaired['pid'], first['pid'])
+        self.assertTrue(repaired['running'])
+        self.assertEqual(self.cli('read')['messages'], [])
+
+    def test_crashed_listener_reuses_recorded_socket_and_rejects_replacements(self):
+        first = self.cli('connect', '--session', self.target['sessionId'])
+        os.kill(first['pid'], 9)
+        time.sleep(.1)
+        repaired = self.cli('start')
+        self.assertEqual(repaired['address'], first['address'])
+        self.assertTrue(repaired['running'])
+        self.cli('stop')
+        path = Path(first['address'][4:])
+        path.write_text('Foreign replacement')
+        result = self.cli('start', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(path.read_text(), 'Foreign replacement')
+
+    def test_legacy_address_can_be_pinned_without_a_notice(self):
+        self.cli('init', '--session', self.target['sessionId'])
+        old = 'uds:' + str(self.root / '654321.sock')
+        with patch.dict(os.environ, self.env):
+            relay.pin_address(self.state, old)
+        first = self.cli('start')
+        self.cli('stop')
+        self.assertEqual(self.cli('start')['address'], old)
+        self.assertEqual(first['address'], old)
+        self.assertEqual(self.cli('read')['messages'], [])
 
     def test_no_retargeting_of_existing_mailbox(self):
         self.cli('connect', '--session', self.target['sessionId'])
