@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3
+
+- Preserve reply addresses across relay restarts, including recovered legacy addresses.
+- Check listener reachability and repair missing sockets without peer messages or model calls.
+- Add controller maintenance for idle connections and regressions for silent recovery, stale sockets and foreign replacements.
+
 ## 0.2.2 — 2026-09-13
 
 - Explain mailbox access failures with the exact state path, SQLite side-file requirements, and normal approved execution or a native Codex directory grant.

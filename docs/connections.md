@@ -78,3 +78,11 @@ Permission to share task material is separate from filesystem access. The host
 application should show and record the user's sharing scope at pairing time,
 including any model-provider processing, while preserving existing permissions
 and the selected workflow's sharing barriers.
+
+## Controller restart recovery
+
+Call `Connection.maintain()` during startup and local maintenance ticks even when
+there are no outgoing messages. This restores enabled Claude listeners at their
+persisted reply address; it creates no peer messages and consumes no model tokens.
+`recover()` continues to mark ambiguous deliveries unconfirmed, without retrying
+them. Maintenance must not be implemented as model prompts or peer keepalives.

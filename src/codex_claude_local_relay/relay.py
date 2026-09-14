@@ -28,6 +28,7 @@ import time
 import uuid
 
 from . import __version__
+from .endpoints import listener_alive, pin_address, prepare_socket, record_socket, remove_socket
 
 MAX_FRAME = 1_048_576
 TESTED_CLAUDE_VERSIONS = ('2.1.261',)
@@ -294,14 +295,8 @@ def serve(state):
     config = json.loads((state / 'config.json').read_text())
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', config.get('sender', 'codex-reviewer')):
         raise ValueError('Invalid sender name in config')
-    target = resolve_session(config['session_id'])
-    directory = Path(target['messagingSocketPath']).parent
-    info = directory.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
-        raise ValueError('Unsafe socket directory')
-    path = directory / f'{os.getpid()}.sock'
-    if len(str(path).encode()) > 103:
-        raise ValueError('Reply socket path exceeds the supported Unix socket path length')
+    path = pin_address(state)
+    prepare_socket(state, path)
     address = 'uds:' + str(path)
     stop = threading.Event()
 
@@ -331,6 +326,7 @@ def serve(state):
 
     server = Server(str(path), Handler)
     os.chmod(path, 0o600)
+    owned_socket = record_socket(state, path)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     metadata = {'version': __version__, 'pid': os.getpid(), 'proc_start': proc_start(os.getpid()),
                 'address': address, 'started_at': now(), **config}
@@ -359,7 +355,7 @@ def serve(state):
     finally:
         server.shutdown()
         server.server_close()
-        path.unlink(missing_ok=True)
+        remove_socket(path, owned_socket)
         (state / 'daemon.json').unlink(missing_ok=True)
 
 
@@ -367,14 +363,25 @@ def daemon_status(state):
     try:
         metadata = json.loads((state / 'daemon.json').read_text())
         live = proc_start(metadata['pid']) == metadata['proc_start']
-        return {**metadata, 'running': live}
+        return {**metadata, 'process_running': live, 'running': live and listener_alive(metadata)}
     except (OSError, ValueError, KeyError):
-        return {'running': False}
+        return {'running': False, 'process_running': False}
 
 
 def start_daemon(state):
-    if daemon_status(state)['running']:
-        return daemon_status(state)
+    # Serialize start/repair without holding the daemon's lifetime lock.
+    with (state / 'startup.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _start_daemon(state)
+
+
+def _start_daemon(state):
+    pin_address(state)
+    status_value = daemon_status(state)
+    if status_value['running']:
+        return status_value
+    if status_value['process_running']:
+        stop_daemon(state)
     with (state / 'daemon.log').open('a', encoding='utf-8') as log:
         child = subprocess.Popen([sys.executable, '-m', 'codex_claude_local_relay',
             '--state', str(state), 'serve'], stdin=subprocess.DEVNULL,
@@ -393,11 +400,11 @@ def start_daemon(state):
 
 def stop_daemon(state):
     status_value = daemon_status(state)
-    if not status_value['running']:
+    if not status_value['process_running']:
         return
     os.kill(status_value['pid'], signal.SIGTERM)
     for _ in range(100):
-        if not daemon_status(state)['running']:
+        if not daemon_status(state)['process_running']:
             return
         time.sleep(0.1)
     raise RuntimeError('Relay has not stopped yet; no replacement was started')

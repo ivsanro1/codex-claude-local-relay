@@ -10,7 +10,9 @@ whose `procStart` matches field 22 of `/proc/<pid>/stat`, whose `peerProtocol` i
 1, and which expose `messagingSocketPath`. Enrollment uses the exact session UUID.
 Discovery reads registry metadata only, not conversations, model prompts, or tokens.
 
-The relay binds `<Claude socket directory>/<relay pid>.sock`. The directory must
+The relay persists its address in `reply.json` and reuses it across restarts. New
+mailboxes bind `<Claude socket directory>/<stable mailbox hash>.sock`; a recovered
+legacy address can be retained unchanged. The directory must
 be owned by the current UID and not writable by other users/groups. The reply
 socket is mode 0600. It is not registered as a pretend Claude session.
 
@@ -55,3 +57,16 @@ There is no exactly-once delivery guarantee, model wake-up service, remote
 transport, or authority propagation. The trust boundary is one Linux account.
 Messages and exports may contain private project data; the application does not
 upload them. The protocol may change independently of this package.
+
+## Silent lifecycle recovery
+
+Controllers call `Connection.maintain()` periodically, including while an enabled
+pair is idle. It restores missing listeners without adding messages, repeating
+handshakes, requesting idle notices, or invoking a model. A socket health check
+connects to the relay itself and sends no frames. Dead sockets are reclaimed only
+when their recorded device/inode belongs to this mailbox; foreign files, symlinks
+and active replacement listeners are left intact.
+
+`daemon_status()` distinguishes `process_running` from `running`: the latter also
+requires a reachable socket with the expected process credentials. An unhealthy
+listener can be replaced while keeping the address already known to its peer.
