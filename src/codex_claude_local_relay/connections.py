@@ -220,7 +220,32 @@ class Connection:
             "enabled": self.enabled(),
             "notifications": notices,
             "latest": dict(last) if last else None,
+            "routing_issues": self.routing_issues(),
         }
+
+    def routing_issues(self):
+        """Surface received messages that cannot reach this immutable pair.
+
+        Native SendMessage success confirms socket transport only. Keep these
+        messages in their original mailbox; never guess a route or replay old
+        messages that the sender may already have consolidated and resent.
+        """
+        issues = []
+        for key in self.ids:
+            if not key.startswith("claude:"):
+                continue
+            with relay.connect_db(self.leg(key)) as db:
+                rows = db.execute(
+                    "SELECT id,at,thread FROM messages WHERE direction='in' "
+                    "AND (thread IS NULL OR thread<>?) ORDER BY seq DESC LIMIT 10",
+                    (self.config["id"],),
+                ).fetchall()
+            issues.extend({
+                "id": row["id"], "at": row["at"], "sender": key,
+                "error": "Received by the relay but not forwarded: missing or invalid connection header. "
+                         "Check the saved mailbox before resending; the sender may already have sent a corrected message.",
+            } for row in rows)
+        return sorted(issues, key=lambda item: item["at"], reverse=True)[:10]
 
     def recover(self):
         with relay.connect_db(self.state) as db:

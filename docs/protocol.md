@@ -38,7 +38,11 @@ Native replies arrive through a new Unix connection from the enrolled Claude
 process. Check its UID, PID, and current registry process-start identity. Parse
 only message bodies and recognized delivery receipts; do not store auth frames.
 `PROJECT_RELAY` provides application-level thread and reply correlation. Missing
-metadata yields an unthreaded message rather than a discarded answer.
+metadata yields an unthreaded message rather than a discarded answer. The header's
+JSON object may be followed by message text on the same line. Pair status exposes
+unthreaded and foreign-thread messages as routing issues: native send success
+means socket transport, not forwarding to the paired agent. Previously skipped
+messages are retained and never automatically replayed.
 
 ## Storage and failure behavior
 

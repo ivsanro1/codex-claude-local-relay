@@ -202,12 +202,14 @@ def correlation(body):
     for line in body.splitlines()[:5]:
         if line.startswith('PROJECT_RELAY '):
             try:
-                meta = json.loads(line[len('PROJECT_RELAY '):])
+                # Decode the leading object, not the entire line: native peers
+                # sometimes put their message immediately after the header.
+                meta, _ = json.JSONDecoder().raw_decode(line[len('PROJECT_RELAY '):].lstrip())
                 if isinstance(meta, dict):
                     return {k: v for k, v in meta.items()
                             if k in ('thread', 'reply_to') and isinstance(v, str)}
             except ValueError:
-                pass
+                return {}  # Never recover a malformed route from quoted text below it.
     return {}
 
 

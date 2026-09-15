@@ -98,6 +98,28 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(config["participants"], self.participants)
         self.assertEqual(self.link.state.stat().st_mode & 0o777, 0o700)
 
+    def test_inline_message_is_forwarded_once_and_unrouted_messages_are_visible(self):
+        claude = 'claude:10000000-0000-4000-8000-000000000004'
+        with patch.object(relay, 'resolve_session'), patch.object(relay, 'start_daemon'), patch.object(relay, 'enroll'):
+            link = Connection.create(self.root / 'mixed', [self.participants[0], {'id': claude, 'cwd': str(self.root)}])
+        with relay.connect_db(link.state) as db:
+            db.execute('DELETE FROM pair_messages')
+        body = 'PROJECT_RELAY ' + json.dumps({'thread': link.config['id']}) + ' Same-line review.'
+        for message_id, text in [('inline', body), ('missing', 'No routing header'),
+                                 ('foreign', 'PROJECT_RELAY {"thread":"another-pair"} Foreign route')]:
+            frame = {'type': 'user', 'msg_id': message_id, 'message': {'content': text}}
+            relay.receive_frame(link.leg(claude), frame, 123)
+            relay.receive_frame(link.leg(claude), frame, 123)
+        with patch('codex_claude_local_relay.connections.subprocess.run',
+                   return_value=subprocess.CompletedProcess([], 0, '', '')) as run:
+            link.tick(lambda _: None, '/synthetic/codex')
+            link.tick(lambda _: None, '/synthetic/codex')
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(link.read()[0]['body'], body)
+        self.assertEqual(link.read()[0]['recipient'], A)
+        self.assertEqual({r['id'] for r in link.snapshot()['routing_issues']}, {'missing', 'foreign'})
+        self.assertEqual(len(relay.read_messages(link.leg(claude))), 3)
+
     def test_controller_prepares_messages_in_delivery_selection_transaction(self):
         class Gated(Connection):
             def prepare(self, db):
