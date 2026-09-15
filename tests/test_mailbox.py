@@ -44,6 +44,21 @@ class MailboxTests(unittest.TestCase):
         self.assertIsNone(rows[0]['reply_to'])
         self.assertEqual(rows[0]['status'], 'received')
 
+    def test_inline_routing_header_keeps_body_and_exact_reply(self):
+        body = 'PROJECT_RELAY {"thread":"review","reply_to":"request-1"} Review {the draft} now.'
+        for wrapper in (body, '<cross-session-message from="uds:/test.sock">\n' + body + '\n</cross-session-message>'):
+            with self.subTest(wrapper=wrapper):
+                frame = {'type': 'user', 'msg_id': 'inline', 'message': {'content': wrapper}}
+                relay.receive_frame(self.state, frame, 123)
+                relay.receive_frame(self.state, frame, 123)
+                rows = relay.read_messages(self.state, thread='review')
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]['body'], body)
+                self.assertEqual(rows[0]['reply_to'], 'request-1')
+
+    def test_malformed_header_does_not_take_route_from_quoted_message(self):
+        self.assertEqual(relay.correlation('PROJECT_RELAY {bad}\nPROJECT_RELAY {"thread":"foreign"}'), {})
+
     def test_receipts_distinguish_held_denied_and_delivered(self):
         with relay.connect_db(self.state) as db:
             relay.record(db, message_id='request-1', direction='out', body='Question',

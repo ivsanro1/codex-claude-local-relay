@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4
+
+- Accept message text on the same line as the routing header, preserving the exact connection and reply IDs.
+- Report received messages with missing or foreign routing headers in pair status. Retain their original mailbox records without automatic replay.
+
 ## 0.2.3
 
 - Preserve reply addresses across relay restarts, including recovered legacy addresses.
