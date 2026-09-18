@@ -1,5 +1,5 @@
 """Local peer messaging for an existing Claude Code session."""
-__version__ = "0.2.4"
+__version__ = "0.3.0"
 
 
 def main():

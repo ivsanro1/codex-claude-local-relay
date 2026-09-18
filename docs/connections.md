@@ -13,12 +13,36 @@ on either side. Every Claude endpoint has an independent legacy peer mailbox;
 its process-authenticated replies are forwarded only when their `PROJECT_RELAY`
 thread matches the connection ID and their optional reply ID belongs to that leg.
 
-Codex receives messages using `codex queue --thread FULL_UUID --message TEXT`.
-With CLI 0.153.3, a synthetic app-server probe verified direct `thread/queue/add`,
-with no name lookup, resume, or model override. The CLI's native queue determines
-when a message is processed; enqueue success is not a model response. An older
-CLI without this command is unsupported. Native real-session compatibility still
-depends on the installed CLIs; fake peers do not establish it after an upgrade.
+Codex receives live input through the App Server owning the selected thread.
+The controller's validation callback returns `{"codex_socket": "/private/runtime.sock"}`
+from that exact writer process. Active turns receive `turn/steer` with the expected
+turn ID; idle threads receive `turn/start`. No thread is resumed, no model or
+permission is overridden, and no fallback native queue is used. Codex 0.155.0 is
+the regression baseline. A detached or incompatible runtime fails visibly.
+
+Launch a native terminal with `codex-relay-session --` or
+`codex-relay-session -- resume FULL_UUID`. Its private runtime stays with the
+terminal, retains normal Codex configuration, and closes when the terminal exits.
+This does not attach to an already-running unexposed terminal: end that terminal
+normally before resuming. Never start a second writer to it.
+
+`accepted_native` means the API accepted the input; `input_observed` means the
+exact message was subsequently found in conversation input. Neither proves the
+model understood or answered. Receipt records, native turn IDs and timestamps
+survive controller restart. `delivery_health()` reports unresolved failures and
+receipts overdue by 60 seconds, independently of the latest successful message.
+`retry_blocked()` explicitly retries only messages known not to have been submitted.
+Approval/input waits and pre-submission turn changes defer safely. Ambiguous
+responses or crashes are reconciled without resending. Legacy `queued_native`
+rows remain untracked and are never replayed by upgrading.
+
+Run `CODEX_RELAY_RUNTIME_TEST=1 python -m unittest discover -s tests -p test_codex_runtime.py -v`
+to certify an installed Codex version. This uses the real runtime with an isolated
+home and deterministic local HTTP model, without an account or model-provider
+request. It tests active sampling, an in-flight tool call, idle wakeup, durable
+controller receipts, and the absence of a native queue backlog. Daily CI tests
+the pinned baseline and latest npm release. A missing CLI fails this explicit
+check; ordinary unit-test runs label it skipped.
 
 Codex receives a generated command of this form:
 
@@ -40,7 +64,7 @@ The library's `read(None)` returns the latest 200 messages for a UI; integer
 cursors page forward through the complete history. State is durable under the
 connection directory; no transcript or credential file is copied into it.
 
-Statuses distinguish controller queueing, native queueing, socket send,
+Statuses distinguish controller queueing, direct input acceptance/observation, socket send,
 delivery receipt, denied/held, blocked recipient, and unknown delivery. A send
 interrupted by a crash is not retried automatically. Disconnect cancels pending
 controller messages and stops Claude mailbox daemons, preserving history.

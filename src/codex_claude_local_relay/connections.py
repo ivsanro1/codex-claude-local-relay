@@ -1,7 +1,7 @@
 """Immutable two-session connections, hosted by a local controller such as Switchboard.
 
-Claude uses the existing authenticated peer mailbox. Codex uses its native queue
-command, always with a UUID. No terminal input, resume, or model override is used.
+Claude uses the existing authenticated peer mailbox. Codex uses direct runtime
+input, always with a UUID. No terminal input, resume, or model override is used.
 The controller calls tick(); messages remain durable while the controller is off.
 """
 
@@ -15,8 +15,9 @@ import stat
 import subprocess
 import sys
 import uuid
+from datetime import datetime, timezone
 
-from . import relay
+from . import codex, relay
 
 
 def identity(value):
@@ -35,10 +36,10 @@ def identity(value):
 def queue_binary(path=None):
     executable = shutil.which("codex", path=path)
     if not executable:
-        raise ValueError("Codex is not installed. Connections need a CLI with the native queue command.")
-    check = subprocess.run([executable, "queue", "--help"], capture_output=True, text=True, timeout=10)
-    if check.returncode or "--thread" not in check.stdout or "--message" not in check.stdout:
-        raise ValueError("This Codex version does not support native queue. Upgrade Codex to connect it.")
+        raise ValueError("Codex is not installed. Connections need its App Server Unix transport.")
+    check = subprocess.run([executable, "app-server", "--help"], capture_output=True, text=True, timeout=10)
+    if check.returncode or "unix://" not in check.stdout:
+        raise ValueError("This Codex version does not support live delivery. Upgrade Codex to connect it.")
     return executable
 
 
@@ -221,7 +222,72 @@ class Connection:
             "notifications": notices,
             "latest": dict(last) if last else None,
             "routing_issues": self.routing_issues(),
+            "delivery": self.delivery_health(),
         }
+
+    def delivery_health(self):
+        now = datetime.now(timezone.utc)
+        with relay.connect_db(self.state) as db:
+            rows = list(db.execute(
+                "SELECT id,at,status,error,recipient FROM pair_messages WHERE status IN "
+                "('queued','deferred','sending','accepted_native','unknown','blocked','queued_native') ORDER BY seq"
+            ))
+        issues = []
+        pending = 0
+        for row in rows:
+            age = max(0, (now - datetime.fromisoformat(row['at'])).total_seconds())
+            pending += row['status'] in ('queued', 'deferred', 'sending', 'accepted_native')
+            if row['status'] in ('unknown', 'blocked', 'queued_native') or age >= 60:
+                issues.append({
+                    "id": row['id'], "recipient": row['recipient'], "status": row['status'],
+                    "age_seconds": int(age),
+                    "error": row['error'] or (
+                        "Legacy Codex queue receipt is untracked. It may already have arrived; do not resend."
+                        if row['status'] == 'queued_native' else
+                        "No conversation-input receipt within 60 seconds. Check the recipient and delivery status."
+                    ),
+                })
+        return {"state": "attention" if issues else "pending" if pending else "healthy",
+                "pending": pending, "issue_count": len(issues), "issues": issues[-50:]}
+
+    def retry_blocked(self):
+        """Only explicit, definitely-unsubmitted deliveries may be retried."""
+        with relay.connect_db(self.state) as db:
+            if not self.enabled():
+                raise ValueError("This connection is disconnected")
+            db.execute("UPDATE pair_messages SET status='queued',error=NULL WHERE status='blocked'")
+
+    def reconcile_codex(self, validate, executable):
+        with relay.connect_db(self.state) as db:
+            cursor = db.execute("SELECT value FROM pair_meta WHERE key='receipt_cursor'").fetchone()
+            after = int(cursor[0]) if cursor else 0
+            pending = [dict(r) for r in db.execute(
+                "SELECT p.seq,p.id,p.recipient,p.wire_id,m.value FROM pair_messages p JOIN pair_meta m "
+                "ON m.key='delivery:' || p.id WHERE p.status IN ('accepted_native','unknown') "
+                "AND p.recipient LIKE 'codex:%' AND p.seq>? ORDER BY p.seq LIMIT 100", (after,)
+            )]
+            # Cycle through the backlog: unresolved old receipts must not starve newer ones.
+            db.execute("INSERT OR REPLACE INTO pair_meta VALUES ('receipt_cursor',?)",
+                       (str(pending[-1]['seq']) if len(pending) == 100 else '0',))
+        groups = {}
+        for row in pending:
+            groups.setdefault((row['recipient'], row['wire_id']), []).append(row)
+        for (recipient, turn_id), rows in groups.items():
+            try:
+                route = validate(recipient) or {}
+                with codex.Client(executable or queue_binary(), route.get('codex_socket')) as client:
+                    found = client.observed(identity(recipient)[1], {r['id'] for r in rows}, turn_id)
+                with relay.connect_db(self.state) as db:
+                    for row in rows:
+                        if row['id'] in found:
+                            details = json.loads(row['value'])
+                            details['observed_at'] = relay.now()
+                            db.execute("UPDATE pair_messages SET status='input_observed',error=NULL WHERE id=?", (row['id'],))
+                            db.execute("UPDATE pair_meta SET value=? WHERE key=?", (json.dumps(details), 'delivery:' + row['id']))
+            except (ValueError, OSError, RuntimeError) as exc:
+                with relay.connect_db(self.state) as db:
+                    for row in rows:
+                        db.execute("UPDATE pair_messages SET error=? WHERE id=?", (str(exc), row['id']))
 
     def routing_issues(self):
         """Surface received messages that cannot reach this immutable pair.
@@ -263,7 +329,7 @@ class Connection:
     def disconnect(self):
         with relay.connect_db(self.state) as db:
             db.execute("UPDATE pair_meta SET value='false' WHERE key='enabled'")
-            db.execute("UPDATE pair_messages SET status='cancelled' WHERE status IN ('queued','blocked')")
+            db.execute("UPDATE pair_messages SET status='cancelled' WHERE status IN ('queued','deferred','blocked')")
         for key in self.ids:
             if key.startswith("claude:"):
                 relay.stop_daemon(self.leg(key))
@@ -376,6 +442,7 @@ class Connection:
     def tick(self, validate, codex_executable=None):
         if not self.enabled():
             return
+        self.reconcile_codex(validate, codex_executable)
         for key in self.ids:
             if key.startswith("claude:"):
                 self._collect(key)
@@ -383,13 +450,16 @@ class Connection:
             db.execute("BEGIN IMMEDIATE")
             self.prepare(db)
             row = db.execute(
-                "SELECT * FROM pair_messages WHERE status='queued' ORDER BY seq LIMIT 1"
+                "SELECT p.* FROM pair_messages p WHERE p.status IN ('queued','deferred') "
+                "AND NOT EXISTS (SELECT 1 FROM pair_messages earlier WHERE earlier.recipient=p.recipient "
+                "AND earlier.seq<p.seq AND earlier.status IN ('queued','deferred')) "
+                "ORDER BY (p.status='deferred'),p.seq LIMIT 1"
             ).fetchone()
         if not row:
             return
         recipient = row["recipient"]
         try:
-            validate(recipient)
+            route = validate(recipient) or {}
             if recipient.startswith("claude:"):
                 relay.start_daemon(self.leg(recipient))
             elif not codex_executable:
@@ -403,8 +473,12 @@ class Connection:
         with relay.connect_db(self.state) as db:
             # Compare-and-set prevents two controller ticks from sending twice.
             changed = db.execute(
-                "UPDATE pair_messages SET status='sending' WHERE id=? AND status='queued'", (row["id"],)
+                "UPDATE pair_messages SET status='sending' WHERE id=? AND status=?", (row["id"], row["status"])
             ).rowcount
+            if changed and recipient.startswith('codex:'):
+                db.execute("INSERT OR REPLACE INTO pair_meta VALUES (?,?)", (
+                    'delivery:' + row['id'], json.dumps({'attempted_at': relay.now(), 'client_id': row['id']})
+                ))
         if not changed:
             return
         envelope = (
@@ -418,16 +492,19 @@ class Connection:
                 wire_id, status = result["id"], "queued_peer"
             else:
                 _, native = identity(recipient)
-                result = subprocess.run(
-                    [codex_executable, "queue", "--thread", native, "--message", envelope],
-                    capture_output=True,
-                    text=True,
-                    timeout=20,
-                )
-                if result.returncode:
-                    error = "Codex queue failed: " + result.stderr[-1000:]
-                else:
-                    status = "queued_native"
+                with codex.Client(codex_executable, route.get('codex_socket')) as client:
+                    result = client.deliver(native, row['id'], envelope)
+                wire_id, status = result['turn_id'], 'accepted_native'
+                with relay.connect_db(self.state) as db:
+                    details = json.loads(db.execute("SELECT value FROM pair_meta WHERE key=?", ('delivery:' + row['id'],)).fetchone()[0])
+                    details.update(result, accepted_at=relay.now())
+                    db.execute("UPDATE pair_meta SET value=? WHERE key=?", (json.dumps(details), 'delivery:' + row['id']))
+        except codex.RetryLater as exc:
+            status, error = 'deferred', str(exc)
+        except codex.Unavailable as exc:
+            status, error = 'blocked', str(exc)
+        except codex.Unconfirmed as exc:
+            error = str(exc)
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
             error = "Delivery could not be confirmed (" + type(exc).__name__ + "). No automatic retry."
         with relay.connect_db(self.state) as db:

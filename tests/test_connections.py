@@ -1,13 +1,15 @@
 import json
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from fake_codex import native_delivery
+
 from codex_claude_local_relay import relay
 from codex_claude_local_relay.connections import Connection, identity
+from codex_claude_local_relay.codex import Unconfirmed
 
 A = "codex:10000000-0000-4000-8000-000000000001"
 B = "codex:10000000-0000-4000-8000-000000000002"
@@ -51,23 +53,18 @@ class ConnectionTests(unittest.TestCase):
                 self.link.send(A, B, "No context")
         self.assertEqual(len(self.link.read()), 3)  # Two notices, one valid message.
 
-    def test_both_notices_and_messages_use_uuid_queue_without_model_or_resume(self):
+    def test_both_notices_use_exact_runtime_identity_and_gain_receipts(self):
         checked = []
-        with patch(
-            "codex_claude_local_relay.connections.subprocess.run",
-            return_value=subprocess.CompletedProcess([], 0, "", ""),
-        ) as run:
+        with native_delivery() as run:
             self.link.tick(checked.append, "/synthetic/codex")
             self.link.tick(checked.append, "/synthetic/codex")
             self.link.tick(checked.append, "/synthetic/codex")
-        self.assertEqual(checked, [A, B])
+        self.assertEqual(set(checked), {A, B})
         self.assertEqual(run.call_count, 2)
         for call, expected in zip(run.call_args_list, (A, B)):
-            argv = call.args[0]
-            self.assertEqual(argv[:4], ["/synthetic/codex", "queue", "--thread", expected[6:]])
-            self.assertNotIn("--model", argv)
-            self.assertNotIn("resume", argv)
-        self.assertTrue(all(r["status"] == "queued_native" for r in self.link.read()))
+            self.assertEqual(call.args[0], expected[6:])
+            self.assertEqual(len(call.args), 3)
+        self.assertTrue(all(r["status"] == "input_observed" for r in self.link.read()))
 
     def test_disconnected_pair_rejects_send_and_cancels_pending(self):
         self.link.disconnect()
@@ -78,12 +75,12 @@ class ConnectionTests(unittest.TestCase):
         self.assertTrue(all(r["status"] == "cancelled" for r in self.link.read()))
 
     def test_missing_recipient_is_blocked_and_ambiguous_send_is_never_retried(self):
-        with patch("codex_claude_local_relay.connections.subprocess.run") as run:
+        with native_delivery(receipts=False) as run:
             self.link.tick(
                 lambda _: (_ for _ in ()).throw(ValueError("Recipient not live")), "/synthetic/codex"
             )
             run.assert_not_called()
-            run.side_effect = subprocess.TimeoutExpired("synthetic", 20)
+            run.side_effect = Unconfirmed("lost response")
             self.link.tick(lambda _: None, "/synthetic/codex")
             self.link.tick(lambda _: None, "/synthetic/codex")
             self.assertEqual(run.call_count, 1)
@@ -110,8 +107,7 @@ class ConnectionTests(unittest.TestCase):
             frame = {'type': 'user', 'msg_id': message_id, 'message': {'content': text}}
             relay.receive_frame(link.leg(claude), frame, 123)
             relay.receive_frame(link.leg(claude), frame, 123)
-        with patch('codex_claude_local_relay.connections.subprocess.run',
-                   return_value=subprocess.CompletedProcess([], 0, '', '')) as run:
+        with native_delivery() as run:
             link.tick(lambda _: None, '/synthetic/codex')
             link.tick(lambda _: None, '/synthetic/codex')
         self.assertEqual(run.call_count, 1)
@@ -132,10 +128,7 @@ class ConnectionTests(unittest.TestCase):
         with patch.dict(os.environ, {"CODEX_THREAD_ID": A[6:]}):
             # The ordinary CLI class writes to the same queue as the controller.
             pending = self.link.send(A, B, "Wait for the application handshake")
-        with patch(
-            "codex_claude_local_relay.connections.subprocess.run",
-            return_value=subprocess.CompletedProcess([], 0, "", ""),
-        ) as run:
+        with native_delivery() as run:
             for _ in range(4):
                 link.tick(lambda _: None, "/synthetic/codex")
             self.assertEqual(run.call_count, 2)  # Only the controller's notices.

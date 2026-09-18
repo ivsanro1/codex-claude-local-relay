@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from fake_codex import native_delivery
 
 from codex_claude_local_relay.connections import Connection
 from codex_claude_local_relay import relay
@@ -95,7 +96,7 @@ class LifecycleTests(unittest.TestCase):
             relay.stop_daemon(leg)
             reopened = Connection(connection.state)
             reopened.recover()
-            with patch('codex_claude_local_relay.connections.subprocess.run') as native:
+            with native_delivery() as native:
                 for _ in range(5):
                     reopened.maintain()
                     reopened.tick(lambda _: None, '/synthetic/codex')
@@ -106,15 +107,14 @@ class LifecycleTests(unittest.TestCase):
             # Only the fixture is prompted here: its independent send uses the old route.
             (self.root / 'initiate.json').write_text(json.dumps({
                 'address': first['address'], 'thread': connection.config['id']}))
-            with patch('codex_claude_local_relay.connections.subprocess.run',
-                       return_value=subprocess.CompletedProcess([], 0, '', '')) as native:
+            with native_delivery() as native:
                 for _ in range(100):
                     reopened.tick(lambda _: None, '/synthetic/codex')
                     if len(reopened.read()) > len(before):
                         break
                     time.sleep(.03)
                 self.assertEqual(native.call_count, 1)
-                self.assertEqual(native.call_args.args[0][3], codex[6:])
+                self.assertEqual(native.call_args.args[0], codex[6:])
 
     def test_missing_socket_is_unhealthy_and_repaired_without_sending(self):
         first = self.cli('connect', '--session', self.target['sessionId'])
@@ -167,17 +167,16 @@ class LifecycleTests(unittest.TestCase):
             connection = Connection.create(self.root / 'pair', [
                 {'id': codex, 'cwd': str(self.root)}, {'id': claude, 'cwd': str(self.root)}])
             self.addCleanup(connection.disconnect)
-            with patch('codex_claude_local_relay.connections.subprocess.run',
-                       return_value=subprocess.CompletedProcess([], 0, '', '')) as native:
+            with native_delivery() as native:
                 for _ in range(150):
                     connection.tick(lambda key: self.assertIn(key, (codex, claude)), '/synthetic/codex')
                     rows = connection.read()
-                    if any(r['sender'] == claude and r['status'] == 'queued_native' for r in rows):
+                    if any(r['sender'] == claude and r['status'] == 'accepted_native' for r in rows):
                         break
                     time.sleep(0.03)
                 else:
                     self.fail('Claude reply did not reach the exact Codex queue: ' + repr(rows))
-                self.assertTrue(all(call.args[0][3] == codex[6:] for call in native.call_args_list))
+                self.assertTrue(all(call.args[0] == codex[6:] for call in native.call_args_list))
                 count = len(rows)
                 # Same authenticated Claude, but an address/envelope copied from
                 # another connection: never forward it through this pair.
