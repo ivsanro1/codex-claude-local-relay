@@ -105,6 +105,13 @@ class NativeRuntimeTests(unittest.TestCase):
                 self.assertIn(b"fixture-model default", output)
                 with Client(binary, sock) as client:
                     loaded = client.call("thread/loaded/list", {})["data"]
+                    # The model label may render before thread/start completes.
+                    # Synchronize with native readiness, not terminal painting.
+                    deadline = time.monotonic() + 10
+                    while not loaded and time.monotonic() < deadline:
+                        self.assertIsNone(process.poll())
+                        time.sleep(0.05)
+                        loaded = client.call("thread/loaded/list", {})["data"]
                     self.assertEqual(len(loaded), 1)
                     self.assertEqual(client.thread(loaded[0])["status"]["type"], "idle")
                 os.write(master, b"\x04")

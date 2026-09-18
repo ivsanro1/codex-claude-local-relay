@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Wait for native thread readiness in the real TUI regression. The model label can render before thread loading completes; the check still fails if the thread never becomes ready.
+
 ## 0.3.0
 
 - Deliver Codex peer input into active turns through the owning App Server, with explicit idle starts and no silent native-queue fallback.
