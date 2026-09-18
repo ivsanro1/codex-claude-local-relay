@@ -12,6 +12,7 @@ import os
 import pty
 import select
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -28,6 +29,22 @@ from unittest.mock import patch
 from codex_claude_local_relay import relay
 from codex_claude_local_relay.codex import Client
 from codex_claude_local_relay.connections import Connection
+
+
+def stop_fixture_group(process):
+    """Reap this fixture's runtime and background helpers before deleting its home."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=3)
 
 
 class FixtureOwner(Client):
@@ -105,6 +122,13 @@ class NativeRuntimeTests(unittest.TestCase):
                 self.assertIn(b"fixture-model default", output)
                 with Client(binary, sock) as client:
                     loaded = client.call("thread/loaded/list", {})["data"]
+                    # The model label may render before thread/start completes.
+                    # Synchronize with native readiness, not terminal painting.
+                    deadline = time.monotonic() + 10
+                    while not loaded and time.monotonic() < deadline:
+                        self.assertIsNone(process.poll())
+                        time.sleep(0.05)
+                        loaded = client.call("thread/loaded/list", {})["data"]
                     self.assertEqual(len(loaded), 1)
                     self.assertEqual(client.thread(loaded[0])["status"]["type"], "idle")
                 os.write(master, b"\x04")
@@ -118,9 +142,7 @@ class NativeRuntimeTests(unittest.TestCase):
                 self.assertEqual(process.wait(timeout=3), 0)
                 self.assertFalse(sock.exists())
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=8)
+                stop_fixture_group(process)
                 os.close(master)
 
     def test_active_delivery_reaches_model_before_original_turn_completes_and_idle_wakes(
@@ -235,6 +257,7 @@ class NativeRuntimeTests(unittest.TestCase):
                 stdin=subprocess.PIPE,
                 stdout=log,
                 stderr=log,
+                start_new_session=True,
             )
             try:
                 deadline = time.monotonic() + 10
@@ -387,12 +410,7 @@ class NativeRuntimeTests(unittest.TestCase):
                 release_response.set()
                 if sys.exc_info()[0]:
                     print((root / "runtime.log").read_text()[-4000:])
-                server.terminate()
-                try:
-                    server.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    server.kill()
-                    server.wait()
+                stop_fixture_group(server)
                 server.stdin.close()
                 log.close()
 
