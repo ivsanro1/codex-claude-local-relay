@@ -17,13 +17,13 @@ Existing Codex chat  ◄──── local relay + persistent inbox ────
 Either participant can open a thread or reply to one.
 ```
 
-The relay is a small Python CLI with **no runtime dependencies**. It stores
+The relay is a small Python CLI with **a WebSocket transport dependency**. It stores
 threaded conversations locally and uses Claude's existing Unix peer socket.
 No API key, MCP server installation, Claude restart, terminal keystroke injection,
 or network service is needed. Your existing Claude session uses its usual model
 and account; responding still consumes that account's model usage.
 
-**Status: experimental, v0.2.2.** This uses an internal Claude Code interface,
+**Status: experimental, v0.3.0.** This uses an internal Claude Code interface,
 not a public Anthropic API. Tested with Claude Code **2.1.261 on Linux**.
 It is not published on PyPI; install it from the GitHub repository.
 
@@ -32,7 +32,11 @@ It is not published on PyPI; install it from the GitHub repository.
 The source checkout also contains **controller-managed session pairs**, used by
 Switchboard to connect any two Codex/Claude sessions, notify both endpoints, and
 forward replies to exact conversation IDs. This newer mode requires Codex's
-native `queue` command. It is included in v0.2.0 and bundled with Switchboard.
+App Server Unix transport. Version 0.3 delivers into active turns and records input receipts.
+For a steerable native Codex terminal, use `codex-relay-session --` (or
+`codex-relay-session -- resume UUID`). Switchboard prepares this automatically
+for new launches. Ordinary existing terminals without a control socket must be
+ended normally and resumed through this launcher before live pairing.
 See [session pairs](docs/connections.md) for routing guarantees and limitations.
 The per-project mailbox commands documented below keep their original behavior.
 
@@ -78,7 +82,7 @@ keeps it separate from your project's dependencies.
 Install the pinned tag directly from GitHub:
 
 ```bash
-uv tool install 'git+https://github.com/ivsanro1/codex-claude-local-relay.git@v0.2.2'
+uv tool install 'git+https://github.com/ivsanro1/codex-claude-local-relay.git@v0.3.0'
 codex-claude-local-relay --version
 ```
 
@@ -87,12 +91,12 @@ Or clone and install from the checkout:
 ```bash
 git clone https://github.com/ivsanro1/codex-claude-local-relay.git
 cd codex-claude-local-relay
-git checkout v0.2.2
+git checkout v0.3.0
 uv tool install .   # or: pipx install .
 ```
 
 Release downloads also include a wheel and source archive; the wheel can be
-installed with `pipx install /path/to/codex_claude_local_relay-0.2.2-py3-none-any.whl`.
+installed with `pipx install /path/to/codex_claude_local_relay-0.3.0-py3-none-any.whl`.
 The wheel filename is portable Python packaging; this release's runtime is Linux-only.
 
 ## Quick start: connect existing open chats

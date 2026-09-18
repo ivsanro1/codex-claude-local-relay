@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Deliver Codex peer input into active turns through the owning App Server, with explicit idle starts and no silent native-queue fallback.
+- Add a native terminal launcher exposing a private control socket while preserving the terminal lifetime and normal settings.
+- Persist acceptance and conversation-input receipts; expose stalled, blocked, ambiguous and legacy-untracked messages without replaying them.
+- Test real Codex scheduling against a deterministic local model on every change and daily against baseline/latest CLI versions.
+
 ## 0.2.4
 
 - Accept message text on the same line as the routing header, preserving the exact connection and reply IDs.

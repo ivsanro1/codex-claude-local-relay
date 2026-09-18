@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-claude-local-relay"
-version = "0.2.4"
+version = "0.3.0"
 description = "Local bidirectional Codex-Claude communication through a durable peer mailbox"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,10 +20,11 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Topic :: Software Development",
 ]
-dependencies = []
+dependencies = ["websockets>=15,<17"]
 
 [project.scripts]
 codex-claude-local-relay = "codex_claude_local_relay:main"
+codex-relay-session = "codex_claude_local_relay.runtime:main"
 
 [project.urls]
 Homepage = "https://github.com/ivsanro1/codex-claude-local-relay"
