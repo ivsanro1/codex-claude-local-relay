@@ -61,7 +61,7 @@ class Client:
             self.call(
                 "initialize",
                 {
-                    "clientInfo": {"name": "local_relay", "version": "0.4.0"},
+                    "clientInfo": {"name": "local_relay", "version": "0.4.1"},
                     "capabilities": {"experimentalApi": True},
                 },
             )
