@@ -17,6 +17,8 @@ import signal
 import sqlite3
 import stat
 import sys
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -52,6 +54,7 @@ TOOLS = [
             },
             "required": ["text"],
         },
+        "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
     },
     {
         "name": "peers",
@@ -60,6 +63,7 @@ TOOLS = [
             "collaboration mode when saved, and delivery state. Sends nothing."
         ),
         "inputSchema": {"type": "object", "properties": {}},
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     },
     {
         "name": "status",
@@ -75,6 +79,7 @@ TOOLS = [
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Rows, default 10."},
             },
         },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     },
 ]
 
@@ -186,11 +191,26 @@ def bridge_status(root, key, route=None):
         str(uuid.UUID(native))
     except (ValueError, AttributeError):
         return {"ready": False, "detail": "Use a provider and complete session UUID."}
+    live_claude = None
     for row in registrations(root):
         if row.get("provider") != provider:
             continue
-        if provider == "claude" and row.get("session") == key:
-            return {"ready": True, "detail": f"Claude session bridge running (pid {row['pid']})."}
+        if provider == "claude":
+            # The recorded session is informational: an in-app resume can change the
+            # session a Claude process serves before any tool call. Judge by the live
+            # registry row of the bridge's parent process (process-start checked).
+            if live_claude is None:
+                live_claude = {r["pid"]: r["sessionId"] for r in relay.sessions()}
+            current = live_claude.get(row.get("parent_pid"))
+            if current is not None:
+                if "claude:" + current == key:
+                    return {"ready": True, "detail": f"Claude session bridge running (pid {row['pid']})."}
+                continue
+            # Claude Code may register its session after spawning MCP servers: a
+            # bridge whose parent is this session's process also proves readiness.
+            expected = (route or {}).get("pid")
+            if expected and row.get("parent_pid") == expected:
+                return {"ready": True, "detail": f"Claude bridge running under pid {expected} (pid {row['pid']})."}
         if provider == "codex":
             expected = (route or {}).get("codex_socket")
             if expected and row.get("runtime_socket") == str(expected):
@@ -250,12 +270,23 @@ class Server:
 
     # Registration -----------------------------------------------------------
 
-    def register(self):
+    def register(self, wait=0):
+        """Record this bridge. A Claude row may not exist yet at startup; it is filled in when known."""
         directory = registry_dir(self.root)
         session = runtime_socket = None
         if self.provider == "claude":
-            self.claude = self.claude or claude_session(self.pid)
-            session = "claude:" + self.claude["sessionId"]
+            if self.claude is None:
+                deadline = time.monotonic() + wait
+                while True:
+                    try:
+                        self.claude = claude_session(self.pid)
+                        break
+                    except Unbound:
+                        if time.monotonic() >= deadline:
+                            break
+                        time.sleep(0.25)
+            if self.claude is not None:
+                session = "claude:" + self.claude["sessionId"]
         elif self.provider == "codex":
             runtime_socket = codex_runtime(self.pid, self.runtime_socket)
         row = {
@@ -274,6 +305,18 @@ class Server:
         os.chmod(path, 0o600)
         self.registration = path
         return row
+
+    def complete_registration(self, timeout=30):
+        """Background: fill in the Claude session once Claude Code has registered this process."""
+        deadline = time.monotonic() + timeout
+        while self.registration is not None and self.claude is None and time.monotonic() < deadline:
+            try:
+                self.claude = claude_session(self.pid)
+            except Unbound:
+                time.sleep(0.5)
+                continue
+            if self.registration is not None:
+                self.register()
 
     def unregister(self):
         if self.registration is not None:
@@ -477,6 +520,8 @@ def main(argv=None):
     atexit.register(server.unregister)
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda *_: sys.exit(0))
+    if server.provider == "claude" and server.claude is None:
+        threading.Thread(target=server.complete_registration, daemon=True).start()
     try:
         server.serve()
     except KeyboardInterrupt:

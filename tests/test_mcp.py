@@ -116,9 +116,12 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(first, f"[Local relay pair-1; message {row['id']}; from First agent]")
         self.assertEqual(body, "Hello peer")
         self.assertEqual(link.instructions(B), "")
-        legacy = Connection.create(self.root / "legacy", [{"id": A, "cwd": "."}, {"id": B, "cwd": "."}])
+        # Legacy connections keep the CLI route for Codex and the header rule for Claude.
+        self.register_claude()
+        legacy = self.pair(A, CLAUDE, alias=None, messaging=None, name="legacy")
         self.assertIn("pair-send", legacy.instructions(A))
-        self.assertIn("PROJECT_RELAY", legacy.instructions(B.replace("codex", "claude")) if False else "PROJECT_RELAY")
+        self.assertIn(f'PROJECT_RELAY {{"thread":"{legacy.config["id"]}"}}', legacy.instructions(CLAUDE))
+        self.assertIn(A, legacy.instructions(CLAUDE))
 
     def test_bare_wire_delivers_body_only_and_accepts_unthreaded_reply(self):
         listener = socket.socket(socket.AF_UNIX)
@@ -189,12 +192,17 @@ class McpServerTests(unittest.TestCase):
 
     def test_codex_binding_requires_thread_meta_loaded_on_owning_runtime(self):
         server = mcp.Server(self.root, "codex", runtime_socket=Path(self.temp.name) / "runtime.sock", pid=os.getpid())
-        with patch("codex_claude_local_relay.mcp.ancestors", return_value=[os.getpid()]):
-            for meta in (None, {}, {"threadId": 5}, {"threadId": "not-a-uuid"}, {"threadId": A[6:].upper()}):
+        hexed = "0a0b0c0d-0e0f-4a1b-8c2d-3e4f5a6b7c8d"
+        with patch("codex_claude_local_relay.mcp.ancestors", return_value=[os.getpid()]), patch(
+            "codex_claude_local_relay.mcp.codex.Client"
+        ) as factory:
+            client = factory.return_value.__enter__.return_value
+            for meta in (None, {}, {"threadId": 5}, {"threadId": "not-a-uuid"}, {"threadId": hexed.upper()}):
                 with self.assertRaises(mcp.Unbound):
                     server.bind(meta)
-            with patch("codex_claude_local_relay.mcp.codex.Client") as factory:
-                client = factory.return_value.__enter__.return_value
+            client.thread.assert_not_called()  # Nothing reached the runtime for any refusal above.
+            self.assertEqual(server.bind({"threadId": hexed}), "codex:" + hexed)
+            if True:
                 self.assertEqual(server.bind({"threadId": A[6:]}), A)
                 self.assertEqual(server.bind({"threadId": B[6:]}), B)
                 client.thread.assert_any_call(A[6:])
@@ -217,7 +225,10 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(init["protocolVersion"], "2025-06-18")
         self.assertEqual(rpc(server, "initialize", {"protocolVersion": "1999-01-01"})["result"]["protocolVersion"], mcp.PROTOCOL_VERSIONS[0])
         self.assertIsNone(server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}))
-        self.assertEqual(sorted(t["name"] for t in rpc(server, "tools/list")["result"]["tools"]), ["peers", "send", "status"])
+        tools = {t["name"]: t for t in rpc(server, "tools/list")["result"]["tools"]}
+        self.assertEqual(sorted(tools), ["peers", "send", "status"])
+        self.assertEqual([tools[n]["annotations"]["readOnlyHint"] for n in ("peers", "status", "send")], [True, True, False])
+        self.assertFalse(tools["send"]["annotations"]["idempotentHint"])
         error, text = call(server, "peers")
         self.assertFalse(error)
         peers = json.loads(text)["connections"]
@@ -276,15 +287,16 @@ class McpServerTests(unittest.TestCase):
     # Registration -------------------------------------------------------------
 
     def test_registration_and_bridge_status_only_remove_confirmed_dead_files(self):
-        self.register_claude()
+        # The bridge's parent process plays the Claude Code session, as in production.
+        owner = os.getppid()
+        self.register_claude(pid=owner)
         server = mcp.Server(self.root, "claude", pid=os.getpid())
         row = server.register()
-        self.assertEqual((row["provider"], row["session"]), ("claude", CLAUDE))
+        self.assertEqual((row["provider"], row["session"], row["parent_pid"]), ("claude", CLAUDE, owner))
         self.assertTrue(mcp.bridge_status(self.root, CLAUDE)["ready"])
         self.assertFalse(mcp.bridge_status(self.root, "claude:20000000-0000-4000-8000-000000000002")["ready"])
         self.assertFalse(mcp.bridge_status(self.root, "bogus")["ready"])
         directory = self.root / "mcp"
-        gone = subprocess.run([sys.executable, "-c", "pass"])  # A pid that has exited.
         (directory / "dead.json").write_text(json.dumps({"version": 1, "provider": "codex", "pid": 2**22 - 7, "proc_start": "1", "runtime_socket": "/r.sock"}))
         (directory / "malformed.json").write_text("{not json")
         (directory / "unreadable.json").write_text(json.dumps({"version": 1, "provider": "codex", "pid": "x", "proc_start": "1"}))
@@ -298,7 +310,26 @@ class McpServerTests(unittest.TestCase):
         self.assertTrue((directory / "unreadable.json").exists())
         server.unregister()
         self.assertFalse(mcp.bridge_status(self.root, CLAUDE)["ready"])
-        self.assertIsNotNone(gone)
+        # Before Claude Code registers the session, the bridge records its parent only;
+        # the controller can still match that parent, and the session is filled in later.
+        (self.claude_dir / "sessions" / f"{owner}.json").unlink()
+        early = mcp.Server(self.root, "claude", pid=os.getpid())
+        row = early.register()
+        self.assertIsNone(row["session"])
+        self.assertFalse(mcp.bridge_status(self.root, CLAUDE)["ready"])
+        self.assertTrue(mcp.bridge_status(self.root, CLAUDE, {"pid": owner})["ready"])
+        self.assertFalse(mcp.bridge_status(self.root, CLAUDE, {"pid": 1})["ready"])
+        self.register_claude(pid=owner)
+        early.complete_registration(timeout=2)
+        self.assertEqual(mcp.registrations(self.root)[0]["session"], CLAUDE)
+        # An in-app resume before any tool call: readiness follows the live registry,
+        # not the recorded session, and never a same-title substitute.
+        resumed = "claude:20000000-0000-4000-8000-000000000003"
+        self.register_claude(pid=owner, session=resumed)
+        self.assertEqual(mcp.registrations(self.root)[0]["session"], CLAUDE)
+        self.assertFalse(mcp.bridge_status(self.root, CLAUDE)["ready"])
+        self.assertTrue(mcp.bridge_status(self.root, resumed)["ready"])
+        early.unregister()
 
     def test_runtime_overrides_target_the_app_server_without_permission_keys(self):
         overrides = runtime.mcp_overrides(self.root)
