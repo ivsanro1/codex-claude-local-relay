@@ -5,22 +5,42 @@ existing persistent tmux service therefore preserves them across app updates.
 """
 
 import argparse
+import json
 import os
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
+
+
+def mcp_overrides(connections_root):
+    """App Server config overrides that register the bundled MCP server; no permission keys."""
+    root = Path(connections_root).absolute()
+    if not root.is_dir():
+        raise SystemExit(f"Connections root does not exist: {root}")
+    command = [sys.executable, "-m", "codex_claude_local_relay.mcp", "--connections-root", str(root), "--provider", "codex"]
+    return [
+        "-c", "mcp_servers.switchboard.command=" + json.dumps(command[0]),
+        "-c", "mcp_servers.switchboard.args=" + json.dumps(command[1:]),
+    ]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--socket", type=Path)
+    parser.add_argument(
+        "--connections-root",
+        type=Path,
+        help="Give every thread in this runtime the Switchboard MCP messaging tools for this directory",
+    )
     parser.add_argument("args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     extra = args.args[1:] if args.args[:1] == ["--"] else args.args
+    overrides = mcp_overrides(args.connections_root) if args.connections_root else []
     with tempfile.TemporaryDirectory(prefix="codex-relay-") as temporary:
         socket = args.socket or Path(temporary) / "runtime.sock"
         parent = socket.parent.stat()
@@ -51,7 +71,7 @@ def main():
             # Keep diagnostics local to this invocation, away from TUI rendering.
             with open(Path(temporary) / "runtime.log", "wb") as log:
                 server = subprocess.Popen(
-                    [args.codex, "app-server", "--listen", "unix://" + str(socket)],
+                    [args.codex, "app-server", *overrides, "--listen", "unix://" + str(socket)],
                     stdin=subprocess.PIPE,
                     stdout=log,
                     stderr=log,

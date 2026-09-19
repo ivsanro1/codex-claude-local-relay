@@ -78,6 +78,48 @@ misrouting protection, not an authentication boundary against that same user.
 Models retain other tools and may choose to use them. A universal 100% guarantee
 against any wrong-session message would require a stronger execution boundary.
 
+## MCP messaging
+
+`codex_claude_local_relay.mcp` serves `send`, `peers` and `status` over MCP stdio for
+connections created with `Connection.create(..., alias="pair-1", messaging="mcp")`.
+The alias (1–40 characters of `[A-Za-z0-9_.-]`) is what models and users see; full
+session UUIDs stay in `connection.json` and controller diagnostics.
+
+Binding is evidence-only and fails closed:
+
+- **Claude**: the server walks its parent processes and uses the live
+  `<CLAUDE_CONFIG_DIR>/sessions/<pid>.json` row (process-start identity checked). It is
+  resolved on every call, so an in-app resume that changes the session is followed. When
+  `CLAUDE_CODE_SESSION_ID` is present it must agree with the registry.
+- **Codex**: every `tools/call` carries `_meta.threadId`, inserted by the App Server
+  (Codex 0.155.0 `core/src/mcp_tool_call.rs`). The server validates the UUID and asks the
+  App Server that owns it (found through `--listen unix://` in an ancestor's command line,
+  or `--runtime-socket` from the controller when they agree) to confirm the thread is
+  loaded. Calls without that metadata queue nothing.
+
+On startup the server writes `<root>/mcp/<pid>.json` (`provider`, `pid`, `proc_start`,
+`parent_pid`, `session` for Claude, `runtime_socket` for Codex) and removes it on exit.
+`mcp.bridge_status(root, "claude:UUID")` or
+`mcp.bridge_status(root, "codex:UUID", {"codex_socket": PATH})` tells a controller whether
+that exact session can reply; only files whose process is confirmed gone are deleted. For
+Claude the answer is computed exactly as `send` will bind: the live registry row of a current
+ancestor of the bridge process. An in-app resume that changes the session is reflected before
+any tool call, a reused parent pid never counts, and the recorded `session` is informational.
+A bridge that started before Claude Code registered its session becomes ready as soon as the
+registry row appears.
+
+Envelopes on MCP connections are `[Local relay <alias>; message <id>; from <title>]`
+followed by the body. There is no per-message footer for either provider and no
+`PROJECT_RELAY` header on Claude legs; the tool descriptions and the initial notice
+explain how to reply. A Claude leg still accepts a native `SendMessage` reply, threaded
+or not, because its socket belongs to exactly one connection. Connections without the
+`messaging` field keep the previous CLI route, header and footers unchanged.
+
+`codex-relay-session --connections-root DIR -- [codex args]` passes
+`-c mcp_servers.switchboard.command=…` and `.args=[…]` to the App Server. These keys are
+not permission overrides, so `resume` and in-app `/resume` keep working; do not add
+`--add-dir` for the mailbox any more.
+
 ## Sandbox access
 
 The sender needs write access to the state directory, including SQLite WAL and

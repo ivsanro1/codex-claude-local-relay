@@ -9,6 +9,7 @@ import functools
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import stat
@@ -18,6 +19,14 @@ import uuid
 from datetime import datetime, timezone
 
 from . import codex, relay
+
+
+ALIAS = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,39}")
+MESSAGING = ("mcp",)
+
+
+def alias_of(config):
+    return config.get("alias") or config["id"][:8]
 
 
 def identity(value):
@@ -88,9 +97,13 @@ class Connection:
         return self.state / ("claude-" + native)
 
     @classmethod
-    def create(cls, state, participants, connection_id=None):
+    def create(cls, state, participants, connection_id=None, *, alias=None, messaging=None):
         if len(participants) != 2 or participants[0]["id"] == participants[1]["id"]:
             raise ValueError("Choose two different sessions")
+        if alias is not None and (not isinstance(alias, str) or not ALIAS.fullmatch(alias)):
+            raise ValueError("Alias must be 1-40 letters, digits, dots, underscores or hyphens")
+        if messaging is not None and messaging not in MESSAGING:
+            raise ValueError("Unsupported messaging mode")
         for participant in participants:
             provider, native = identity(participant["id"])
             if provider == "claude":
@@ -105,6 +118,10 @@ class Connection:
             "participants": participants,
             "created_at": relay.now(),
         }
+        if alias is not None:
+            config["alias"] = alias
+        if messaging is not None:
+            config["messaging"] = messaging
         with relay.connect_db(state) as db:
             db.executescript("""
                 CREATE TABLE pair_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -123,7 +140,9 @@ class Connection:
                 if provider == "claude":
                     leg = connection.leg(participant["id"])
                     relay.initialize(leg)
-                    relay.enroll(leg, Path(participant["cwd"]), native, "switchboard-" + config["id"][:12])
+                    sender = "switchboard-" + (alias if messaging == "mcp" and alias else config["id"][:12])
+                    # MCP connections deliver the bare body: the tool carries routing.
+                    relay.enroll(leg, Path(participant["cwd"]), native, sender, bare=messaging == "mcp")
                     relay.start_daemon(leg)
             # Both notifications enter one transaction; network deliveries have
             # independent statuses and cannot be promised atomic/exactly-once.
@@ -131,6 +150,18 @@ class Connection:
                 for participant in participants:
                     other = connection.peer(participant["id"])
                     peer = next(p for p in participants if p["id"] == other)
+                    if messaging == "mcp":
+                        connection._insert(
+                            db,
+                            "switchboard",
+                            participant["id"],
+                            f"The user connected this session with {peer.get('title') or other.split(':')[0].title()} "
+                            f"(connection {alias_of(config)}). Send to it with the switchboard MCP tool "
+                            f'send(to="{alias_of(config)}", text=...). No task is assigned by this notice; '
+                            "do not send a greeting or acknowledgement.",
+                            kind="connection",
+                        )
+                        continue
                     connection._insert(
                         db,
                         "switchboard",
@@ -297,13 +328,16 @@ class Connection:
         messages that the sender may already have consolidated and resent.
         """
         issues = []
+        # Each Claude leg socket belongs to exactly one connection, so an MCP
+        # connection accepts unthreaded native replies; a foreign thread never passes.
+        unthreaded = "thread IS NOT NULL AND thread<>?" if self.mcp else "thread IS NULL OR thread<>?"
         for key in self.ids:
             if not key.startswith("claude:"):
                 continue
             with relay.connect_db(self.leg(key)) as db:
                 rows = db.execute(
                     "SELECT id,at,thread FROM messages WHERE direction='in' "
-                    "AND (thread IS NULL OR thread<>?) ORDER BY seq DESC LIMIT 10",
+                    f"AND ({unthreaded}) ORDER BY seq DESC LIMIT 10",
                     (self.config["id"],),
                 ).fetchall()
             issues.extend({
@@ -334,8 +368,20 @@ class Connection:
             if key.startswith("claude:"):
                 relay.stop_daemon(self.leg(key))
 
+    @property
+    def mcp(self):
+        return self.config.get("messaging") == "mcp"
+
+    def label(self, key):
+        participant = next((p for p in self.config["participants"] if p["id"] == key), None)
+        if participant is None:
+            return "Switchboard"  # Controller notices.
+        return participant.get("title") or key.split(":")[0].title()
+
     def instructions(self, recipient):
         other = self.peer(recipient)
+        if self.mcp:
+            return ""  # Tool descriptions and the initial notice explain how to reply.
         if recipient.startswith("claude:"):
             return (
                 "Use only the SendMessage reply address in this envelope. "
@@ -388,7 +434,8 @@ class Connection:
                         "UPDATE pair_messages SET status=? WHERE wire_id=? AND recipient=?",
                         (row["status"], row["reply_to"], key),
                     )
-                if row["direction"] == "in" and row["thread"] == self.config["id"]:
+                accepted = row["thread"] == self.config["id"] or (self.mcp and row["thread"] is None)
+                if row["direction"] == "in" and accepted:
                     # Socket credentials authenticated the sender. A wrong
                     # connection/thread or foreign reply ID is never forwarded.
                     reply = None
@@ -481,10 +528,16 @@ class Connection:
                 ))
         if not changed:
             return
-        envelope = (
-            f"[Local relay {self.config['id']}; message {row['id']}; "
-            f"from {row['sender']}; to {recipient}]\n{row['body']}\n\n" + self.instructions(recipient)
-        )
+        if self.mcp:
+            envelope = (
+                f"[Local relay {alias_of(self.config)}; message {row['id']}; from {self.label(row['sender'])}]\n"
+                f"{row['body']}"
+            )
+        else:
+            envelope = (
+                f"[Local relay {self.config['id']}; message {row['id']}; "
+                f"from {row['sender']}; to {recipient}]\n{row['body']}\n\n" + self.instructions(recipient)
+            )
         status, error, wire_id = "unknown", None, None
         try:
             if recipient.startswith("claude:"):
