@@ -105,19 +105,18 @@ def ancestors(pid, limit=8, proc_root="/proc"):
 
 
 def claude_session(pid):
-    """Return the live Claude registry row owning this process or one of its ancestors."""
+    """Return the live Claude registry row owning this process or one of its ancestors.
+
+    The nearest ancestor with a registry row wins. `CLAUDE_CODE_SESSION_ID` in this process's
+    environment is deliberately not consulted: Claude Code sets it when it spawns the server and
+    never updates it, so after an in-app `/resume` it names a session this process no longer serves
+    while the registry row already names the new one.
+    """
     rows = {row["pid"]: row for row in relay.sessions()}
     for candidate in ancestors(pid):
         row = rows.get(candidate)
-        if row is None:
-            continue
-        expected = os.environ.get("CLAUDE_CODE_SESSION_ID")
-        if expected and expected != row["sessionId"]:
-            raise Unbound(
-                "The Claude session named in the environment differs from the parent process registry; "
-                "refusing to bind this server."
-            )
-        return row
+        if row is not None:
+            return row
     raise Unbound(
         "No live Claude Code session owns this MCP server process. Start it from Claude Code's MCP "
         "configuration; nothing was sent."

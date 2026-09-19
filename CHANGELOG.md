@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+- MCP server: bind the Claude session from the parent process's live registry row only. The
+  `CLAUDE_CODE_SESSION_ID` cross-check is gone: Claude Code sets that variable when it spawns the server
+  and never updates it, so after an in-app `/resume` every tool call failed with "The Claude session named
+  in the environment differs from the parent process registry" although the registry already named the
+  resumed session. Resumed sessions now keep `send`, `peers` and `status`.
+
 ## 0.4.0
 
 - Add `codex-claude-local-relay-mcp` (`python -m codex_claude_local_relay.mcp`): a stdio MCP server with

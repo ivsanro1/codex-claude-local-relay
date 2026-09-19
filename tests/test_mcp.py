@@ -169,17 +169,20 @@ class McpServerTests(unittest.TestCase):
 
     # Binding ------------------------------------------------------------------
 
-    def test_claude_binding_uses_parent_registry_and_environment_cross_check(self):
+    def test_claude_binding_uses_parent_registry_and_ignores_stale_environment(self):
         self.register_claude()
         server = mcp.Server(self.root, "claude", pid=os.getpid())
         self.assertEqual(server.bind(), CLAUDE)
-        with patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "30000000-0000-4000-8000-000000000009"}):
-            with self.assertRaises(mcp.Unbound):
-                mcp.Server(self.root, "claude", pid=os.getpid()).bind()
-        # An in-app resume that changes the registry row is followed on the next call.
+        # An in-app resume that changes the registry row is followed on the next call, even though
+        # the environment still carries the session id Claude Code set when it spawned this server.
         server.register()
         self.register_claude(session="claude:20000000-0000-4000-8000-000000000002")
-        self.assertEqual(server.bind(), "claude:20000000-0000-4000-8000-000000000002")
+        with patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": CLAUDE.split(":", 1)[1]}):
+            self.assertEqual(server.bind(), "claude:20000000-0000-4000-8000-000000000002")
+            self.assertEqual(
+                mcp.Server(self.root, "claude", pid=os.getpid()).bind(),
+                "claude:20000000-0000-4000-8000-000000000002",
+            )
         self.assertEqual(mcp.registrations(self.root)[0]["session"], "claude:20000000-0000-4000-8000-000000000002")
         server.unregister()
         (self.claude_dir / "sessions" / f"{os.getpid()}.json").unlink()

@@ -89,8 +89,9 @@ Binding is evidence-only and fails closed:
 
 - **Claude**: the server walks its parent processes and uses the live
   `<CLAUDE_CONFIG_DIR>/sessions/<pid>.json` row (process-start identity checked). It is
-  resolved on every call, so an in-app resume that changes the session is followed. When
-  `CLAUDE_CODE_SESSION_ID` is present it must agree with the registry.
+  resolved on every call, so an in-app resume that changes the session is followed.
+  `CLAUDE_CODE_SESSION_ID` in the server's environment is ignored: Claude Code sets it at
+  spawn and never updates it, so after a resume it is stale.
 - **Codex**: every `tools/call` carries `_meta.threadId`, inserted by the App Server
   (Codex 0.155.0 `core/src/mcp_tool_call.rs`). The server validates the UUID and asks the
   App Server that owns it (found through `--listen unix://` in an ancestor's command line,
