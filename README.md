@@ -27,6 +27,28 @@ and account; responding still consumes that account's model usage.
 not a public Anthropic API. Tested with Claude Code **2.1.261 on Linux**.
 It is not published on PyPI; install it from the GitHub repository.
 
+## Switchboard MCP messaging (0.4)
+
+Controller-managed connections can give each agent a small set of **MCP tools**
+instead of a shell command and a reply address:
+
+```text
+send(text, to?, reply_to?)   queue a message to the connected peer
+peers()                       list connections: alias, peer title, mode, delivery state
+status(to?, limit?)           transport and input receipts for recent messages
+```
+
+Start it from the agent's MCP configuration with
+`python -m codex_claude_local_relay.mcp --connections-root DIR --provider claude|codex`.
+The server never trusts a model-supplied sender. A Claude server binds to the live
+session registry row of its parent Claude Code process; a Codex server binds every
+call to the `_meta.threadId` the App Server attaches, and checks that thread is
+loaded in the runtime that spawned it. Missing evidence means nothing is queued.
+`codex-relay-session --connections-root DIR` registers the server on the App
+Server for every thread in that terminal. Messages on MCP connections arrive as
+`[Local relay <alias>; message <id>; from <title>]` followed by the body, with no
+footer. See [session pairs](docs/connections.md#mcp-messaging).
+
 ## What it is useful for
 
 The source checkout also contains **controller-managed session pairs**, used by

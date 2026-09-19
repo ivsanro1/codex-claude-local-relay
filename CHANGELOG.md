@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0
+
+- Add `codex-claude-local-relay-mcp` (`python -m codex_claude_local_relay.mcp`): a stdio MCP server with
+  `send`, `peers` and `status` tools for controller-managed connections. It binds the calling session from
+  evidence only: the parent Claude Code process's live registry row, or the `_meta.threadId` that the Codex
+  App Server attaches to every tool call, checked against the runtime that spawned the server. Mailbox writes
+  happen in the server process, so agents no longer need a writable state directory or `--add-dir`.
+- Register live bridges under `<connections root>/mcp/<pid>.json`; `mcp.bridge_status()` lets a controller
+  check that an exact session can reply before pairing it.
+- `Connection.create(..., alias=, messaging="mcp")` saves a short alias and delivers compact envelopes:
+  `[Local relay <alias>; message <id>; from <title>]` plus the body, with no routing footer on either
+  provider and no `PROJECT_RELAY` header on Claude legs. Legacy connections keep every existing string.
+- Claude legs of MCP connections accept unthreaded native replies; each leg socket belongs to one connection.
+- `codex-relay-session --connections-root DIR` registers the MCP server on the App Server through
+  `-c mcp_servers.switchboard.*`, which is not a permission override, so resuming keeps working.
+
 ## 0.3.1
 
 - Stop all owned fixture processes before deleting temporary homes, including native background plugin helpers.
