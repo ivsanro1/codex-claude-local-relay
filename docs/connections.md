@@ -99,13 +99,14 @@ Binding is evidence-only and fails closed:
 
 On startup the server writes `<root>/mcp/<pid>.json` (`provider`, `pid`, `proc_start`,
 `parent_pid`, `session` for Claude, `runtime_socket` for Codex) and removes it on exit.
-`mcp.bridge_status(root, "claude:UUID", {"pid": CLAUDE_PID})` or
+`mcp.bridge_status(root, "claude:UUID")` or
 `mcp.bridge_status(root, "codex:UUID", {"codex_socket": PATH})` tells a controller whether
 that exact session can reply; only files whose process is confirmed gone are deleted. For
-Claude the answer follows the live registry row of the bridge's parent process, so an in-app
-resume that changes the session is reflected before any tool call; the recorded `session`
-is informational. A bridge that started before Claude Code registered its session records
-its parent only, and matches through the `pid` route until the session appears.
+Claude the answer is computed exactly as `send` will bind: the live registry row of a current
+ancestor of the bridge process. An in-app resume that changes the session is reflected before
+any tool call, a reused parent pid never counts, and the recorded `session` is informational.
+A bridge that started before Claude Code registered its session becomes ready as soon as the
+registry row appears.
 
 Envelopes on MCP connections are `[Local relay <alias>; message <id>; from <title>]`
 followed by the body. There is no per-message footer for either provider and no

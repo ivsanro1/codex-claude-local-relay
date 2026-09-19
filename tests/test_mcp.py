@@ -202,14 +202,13 @@ class McpServerTests(unittest.TestCase):
                     server.bind(meta)
             client.thread.assert_not_called()  # Nothing reached the runtime for any refusal above.
             self.assertEqual(server.bind({"threadId": hexed}), "codex:" + hexed)
-            if True:
-                self.assertEqual(server.bind({"threadId": A[6:]}), A)
-                self.assertEqual(server.bind({"threadId": B[6:]}), B)
-                client.thread.assert_any_call(A[6:])
-                client.thread.assert_any_call(B[6:])
-                client.thread.side_effect = codex.Unavailable("not loaded")
-                with self.assertRaises(mcp.Unbound):
-                    server.bind({"threadId": C[6:]})
+            self.assertEqual(server.bind({"threadId": A[6:]}), A)
+            self.assertEqual(server.bind({"threadId": B[6:]}), B)
+            client.thread.assert_any_call(A[6:])
+            client.thread.assert_any_call(B[6:])
+            client.thread.side_effect = codex.Unavailable("not loaded")
+            with self.assertRaises(mcp.Unbound):
+                server.bind({"threadId": C[6:]})
             # A discovered parent runtime that differs from the configured socket is refused.
             with patch("codex_claude_local_relay.mcp.codex.socket_from_process", return_value="/other.sock"):
                 with self.assertRaises(mcp.Unbound):
@@ -300,6 +299,13 @@ class McpServerTests(unittest.TestCase):
         (directory / "dead.json").write_text(json.dumps({"version": 1, "provider": "codex", "pid": 2**22 - 7, "proc_start": "1", "runtime_socket": "/r.sock"}))
         (directory / "malformed.json").write_text("{not json")
         (directory / "unreadable.json").write_text(json.dumps({"version": 1, "provider": "codex", "pid": "x", "proc_start": "1"}))
+        # A recorded parent that is not a live ancestor never counts (reused pid scenario):
+        # pid 1 is alive, its recorded parent_pid claims the owner, but its real ancestry is empty.
+        stale = {**row, "pid": 1, "proc_start": relay.proc_start(1), "parent_pid": owner, "session": CLAUDE}
+        (directory / "stale-parent.json").write_text(json.dumps(stale))
+        server.unregister()
+        self.assertFalse(mcp.bridge_status(self.root, CLAUDE)["ready"])
+        server.register()
         codex_row = {**row, "provider": "codex", "session": None, "runtime_socket": "/fixture/runtime.sock", "pid": os.getpid()}
         (directory / "codex.json").write_text(json.dumps(codex_row))
         self.assertTrue(mcp.bridge_status(self.root, A, {"codex_socket": "/fixture/runtime.sock"})["ready"])
@@ -316,10 +322,10 @@ class McpServerTests(unittest.TestCase):
         early = mcp.Server(self.root, "claude", pid=os.getpid())
         row = early.register()
         self.assertIsNone(row["session"])
-        self.assertFalse(mcp.bridge_status(self.root, CLAUDE)["ready"])
-        self.assertTrue(mcp.bridge_status(self.root, CLAUDE, {"pid": owner})["ready"])
-        self.assertFalse(mcp.bridge_status(self.root, CLAUDE, {"pid": 1})["ready"])
+        self.assertFalse(mcp.bridge_status(self.root, CLAUDE)["ready"])  # bind() would refuse too.
+        self.assertFalse(mcp.bridge_status(self.root, CLAUDE, {"pid": owner})["ready"])
         self.register_claude(pid=owner)
+        self.assertTrue(mcp.bridge_status(self.root, CLAUDE)["ready"])  # Live ancestry, before re-registration.
         early.complete_registration(timeout=2)
         self.assertEqual(mcp.registrations(self.root)[0]["session"], CLAUDE)
         # An in-app resume before any tool call: readiness follows the live registry,

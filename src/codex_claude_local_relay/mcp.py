@@ -196,28 +196,26 @@ def bridge_status(root, key, route=None):
         if row.get("provider") != provider:
             continue
         if provider == "claude":
-            # The recorded session is informational: an in-app resume can change the
-            # session a Claude process serves before any tool call. Judge by the live
-            # registry row of the bridge's parent process (process-start checked).
+            # Recorded fields are informational: an in-app resume can change the
+            # session before any tool call, and a recorded parent pid can be reused.
+            # Judge exactly as bind() will: the live registry row of a current ancestor.
             if live_claude is None:
                 live_claude = {r["pid"]: r["sessionId"] for r in relay.sessions()}
-            current = live_claude.get(row.get("parent_pid"))
-            if current is not None:
+            for ancestor in ancestors(row["pid"]):
+                current = live_claude.get(ancestor)
+                if current is None:
+                    continue
                 if "claude:" + current == key:
                     return {"ready": True, "detail": f"Claude session bridge running (pid {row['pid']})."}
-                continue
-            # Claude Code may register its session after spawning MCP servers: a
-            # bridge whose parent is this session's process also proves readiness.
-            expected = (route or {}).get("pid")
-            if expected and row.get("parent_pid") == expected:
-                return {"ready": True, "detail": f"Claude bridge running under pid {expected} (pid {row['pid']})."}
+                break
         if provider == "codex":
             expected = (route or {}).get("codex_socket")
             if expected and row.get("runtime_socket") == str(expected):
                 return {"ready": True, "detail": f"Codex runtime bridge running (pid {row['pid']})."}
     detail = (
-        "This session has no Switchboard MCP bridge. Resume it through Switchboard, or add the "
-        "bridge to its MCP configuration and restart the agent."
+        "This session has no Switchboard MCP bridge that can bind to it. Resume it through Switchboard, "
+        "or add the bridge to its MCP configuration and restart the agent; a bridge that just started "
+        "becomes ready once Claude Code registers the session."
     )
     return {"ready": False, "detail": detail}
 
@@ -466,7 +464,14 @@ class Server:
                 return self._error(identifier, -32602, f"Unknown tool: {params['name']}")
             except (Unbound, ValueError, relay.StateAccessError, sqlite3.Error, OSError) as exc:
                 text = str(exc)
-                if isinstance(exc, (sqlite3.Error, OSError)) and not isinstance(exc, relay.StateAccessError):
+                if isinstance(exc, relay.StateAccessError):
+                    # The legacy text advises shell grants; this server owns the writes itself.
+                    text = (
+                        "Switchboard's mailbox is not accessible from its own messaging service. "
+                        "Nothing was confirmed; ask the user to check the Switchboard data directory, "
+                        "then inspect status before resending."
+                    )
+                elif isinstance(exc, (sqlite3.Error, OSError)):
                     text = f"Mailbox access failed ({type(exc).__name__}). Nothing was confirmed; inspect status before resending."
                 return self._result(identifier, {"content": [{"type": "text", "text": text}], "isError": True})
             return self._result(
